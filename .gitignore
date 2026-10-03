@@ -1,0 +1,10 @@
+node_modules/
+dist/
+out/
+*.vsix
+*.log
+.vscode-test/
+
+# Privacy: never commit local conversation research or generated handoffs
+docs/research/
+.ai-memory/

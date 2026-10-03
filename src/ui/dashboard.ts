@@ -1,0 +1,815 @@
+import * as vscode from "vscode";
+import type { Level, RateLimits, Source } from "../core/types";
+
+/** One row in the dashboard table. */
+export interface SessionSummary {
+  source: Source;
+  project: string;
+  file: string;
+  messages: number;
+  totalTokens: number;
+  modelLimit: number;
+  percentUsed: number;
+  level: Level;
+  estimatedCostUsd: number;
+  tokenSource: "usage" | "estimate";
+  rateLimits?: RateLimits;
+  updatedAt: number;
+}
+
+/** Alert thresholds, so the chart's rules line up with the actual alerts. */
+export interface DashboardThresholds {
+  warning: number;
+  critical: number;
+  quotaWarning: number;
+  quotaCritical: number;
+}
+
+/**
+ * A webview panel charting every scanned session.
+ *
+ * Chart design notes:
+ *  - Context usage and quota are ratios against a limit, so each is a **meter**
+ *    (a bar on a fixed 0-100% track) rather than a free-scaled bar. The
+ *    warning/critical rules are drawn on the track so a reader sees how close
+ *    a session is to the alert, not just how long the bar is.
+ *  - Their color is a **status** encoding, and status greens and yellows are
+ *    hard to separate under red-green color vision deficiency, so every bar
+ *    also carries a text label ("Critical"/"Warning"/"OK"). Color is never the
+ *    only channel.
+ *  - Cost is a plain magnitude with one series, so it uses a single hue and
+ *    needs no legend.
+ *  - The table underneath is the accessible twin: every value a chart or
+ *    tooltip shows is reachable there without hovering.
+ */
+export class Dashboard {
+  private panel: vscode.WebviewPanel | undefined;
+
+  constructor(
+    private readonly collect: () => Thenable<SessionSummary[]>,
+    private readonly onHandoff: (file: string, source: Source) => Promise<void>,
+    private readonly thresholds: () => DashboardThresholds
+  ) {}
+
+  async show(): Promise<void> {
+    if (this.panel) {
+      this.panel.reveal();
+      await this.refresh();
+      return;
+    }
+    this.panel = vscode.window.createWebviewPanel(
+      "contextControlDashboard",
+      "Context Control Dashboard",
+      vscode.ViewColumn.Active,
+      { enableScripts: true, retainContextWhenHidden: true }
+    );
+    this.panel.onDidDispose(() => (this.panel = undefined));
+    this.panel.webview.html = this.html();
+    this.panel.webview.onDidReceiveMessage(
+      async (msg: { command?: string; file?: string; source?: Source }) => {
+        try {
+          if (msg?.command === "refresh") {
+            await this.refresh();
+          } else if (msg?.command === "handoff" && msg.file && msg.source) {
+            await this.onHandoff(msg.file, msg.source);
+          }
+        } catch {
+          // onHandoff reports its own failures; never reject out of the handler.
+        }
+      }
+    );
+    await this.refresh();
+  }
+
+  private async refresh(): Promise<void> {
+    const panel = this.panel;
+    if (!panel) {
+      return;
+    }
+    void panel.webview.postMessage({ type: "loading" });
+    const sessions = await this.collect();
+    void panel.webview.postMessage({
+      type: "data",
+      sessions,
+      thresholds: this.thresholds(),
+    });
+  }
+
+  private html(): string {
+    // The page script is plain ES5-style string-free JS: it builds DOM with
+    // createElement/textContent so that project names and file paths coming off
+    // disk are never interpreted as markup.
+    return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline';" />
+<style>
+  :root {
+    color-scheme: dark light;
+    --ok: var(--vscode-charts-green, #89d185);
+    --warn: var(--vscode-charts-yellow, #cca700);
+    --crit: var(--vscode-charts-red, #f14c4c);
+    --accent: var(--vscode-charts-blue, #3794ff);
+    --line: var(--vscode-panel-border, rgba(128,128,128,.35));
+    --track: var(--vscode-editorWidget-background, rgba(128,128,128,.16));
+    --ink: var(--vscode-foreground);
+    --ink2: var(--vscode-descriptionForeground);
+    --surface: var(--vscode-editor-background);
+    --card: var(--vscode-sideBar-background, transparent);
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: var(--vscode-font-family);
+    color: var(--ink);
+    background: var(--surface);
+    margin: 0;
+    font-size: 13px;
+  }
+  .shell { padding: 16px 20px 28px; max-width: 1280px; margin: 0 auto; }
+  .muted { color: var(--ink2); }
+  .small { font-size: 11.5px; }
+
+  /* ---- header ---- */
+  .top { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 14px; }
+  h1 { font-size: 15px; margin: 0 0 2px; font-weight: 600; letter-spacing: -.01em; }
+  button {
+    font-family: inherit; font-size: 12px; color: var(--vscode-button-foreground);
+    background: var(--vscode-button-background); border: none; padding: 5px 12px;
+    border-radius: 4px; cursor: pointer; white-space: nowrap;
+  }
+  button:hover { background: var(--vscode-button-hoverBackground); }
+  button.secondary { color: var(--vscode-button-secondaryForeground); background: var(--vscode-button-secondaryBackground); }
+  button.secondary:hover { background: var(--vscode-button-secondaryHoverBackground); }
+  button.chip {
+    border: 1px solid var(--line); background: transparent; color: var(--ink2);
+    border-radius: 999px; padding: 3px 11px; font-size: 11.5px;
+  }
+  button.chip:hover { color: var(--ink); border-color: var(--ink2); }
+  button.chip[aria-pressed="true"] {
+    background: var(--vscode-list-activeSelectionBackground);
+    color: var(--vscode-list-activeSelectionForeground);
+    border-color: transparent;
+  }
+
+  /* ---- one filter row, above everything it scopes ---- */
+  .filters { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; }
+  input[type="search"] {
+    min-width: 200px; flex: 1; max-width: 300px; color: var(--vscode-input-foreground);
+    background: var(--vscode-input-background);
+    border: 1px solid var(--vscode-input-border, var(--line));
+    padding: 5px 9px; border-radius: 4px; font-family: inherit; font-size: 12px;
+  }
+
+  /* ---- KPI stat tiles ---- */
+  .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 18px; }
+  .kpi { border: 1px solid var(--line); border-radius: 8px; padding: 11px 13px; background: var(--card); }
+  .kpi .label { color: var(--ink2); font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em; }
+  /* proportional figures: tabular-nums makes a standalone big number look loose */
+  .kpi .value { font-size: 25px; font-weight: 600; line-height: 1.15; margin-top: 3px; letter-spacing: -.02em; }
+  .kpi .sub { color: var(--ink2); font-size: 11px; margin-top: 1px; }
+
+  /* ---- cards ---- */
+  .card { border: 1px solid var(--line); border-radius: 8px; padding: 14px 16px 16px; background: var(--card); margin-bottom: 14px; }
+  .card > h2 { font-size: 12px; margin: 0 0 2px; font-weight: 600; }
+  .card > .sub { color: var(--ink2); font-size: 11.5px; margin-bottom: 14px; }
+  .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; align-items: start; }
+  .pair .card { margin-bottom: 0; }
+
+  /* ---- meter chart ---- */
+  .chart { display: grid; grid-template-columns: minmax(96px, 150px) 1fr minmax(104px, 118px); gap: 10px 12px; align-items: center; }
+  .ticks { position: relative; height: 13px; }
+  .ticks span { position: absolute; top: 0; transform: translateX(-50%); font-size: 10px; color: var(--ink2); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .ticks span.first { transform: none; }
+  .ticks span.last { transform: translateX(-100%); }
+
+  .rowName { overflow: hidden; }
+  .rowName .n { font-weight: 550; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .rowName .s { color: var(--ink2); font-size: 10.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  /* the meter: fixed 0-100% track, 10px, 4px rounded data-end */
+  .meter { position: relative; height: 10px; border-radius: 5px; background: var(--track); }
+  .meter > .fill { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 5px; min-width: 3px; transition: width .35s ease; }
+  .meter > .rule { position: absolute; top: -4px; bottom: -4px; width: 1px; background: var(--ink2); opacity: .65; }
+  .lv-ok    > .fill { background: var(--ok); }
+  .lv-warning > .fill { background: var(--warn); }
+  .lv-critical > .fill { background: var(--crit); }
+  .lv-accent > .fill { background: var(--accent); }
+
+  .rowVal { display: flex; align-items: baseline; justify-content: flex-end; gap: 7px; }
+  .rowVal .v { font-variant-numeric: tabular-nums; font-weight: 600; }
+  /* status text, never color alone */
+  .tag { font-size: 10px; text-transform: uppercase; letter-spacing: .05em; color: var(--ink2); white-space: nowrap; }
+
+  .hoverable { cursor: default; }
+
+  /* ---- legend ---- */
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 14px; padding-top: 11px; border-top: 1px solid var(--line); }
+  .legend .item { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--ink2); }
+  .swatch { width: 10px; height: 10px; border-radius: 3px; flex: none; }
+  .swatch.rule { width: 1px; height: 12px; border-radius: 0; background: var(--ink2); opacity: .65; }
+
+  /* ---- table twin ---- */
+  details.tableCard { border: 1px solid var(--line); border-radius: 8px; background: var(--card); }
+  details.tableCard > summary { cursor: pointer; padding: 12px 16px; font-size: 12px; font-weight: 600; list-style: none; }
+  details.tableCard > summary::-webkit-details-marker { display: none; }
+  details.tableCard > summary::before { content: "\\25B8"; display: inline-block; margin-right: 7px; color: var(--ink2); transition: transform .15s; }
+  details.tableCard[open] > summary::before { transform: rotate(90deg); }
+  .tableWrap { overflow-x: auto; padding: 0 16px 14px; }
+  table { border-collapse: collapse; width: 100%; font-size: 12px; }
+  th, td { text-align: left; padding: 7px 9px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+  th { cursor: pointer; user-select: none; color: var(--ink2); font-size: 10.5px; text-transform: uppercase; letter-spacing: .05em; white-space: nowrap; font-weight: 600; }
+  th:hover { color: var(--ink); }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  td .path { color: var(--ink2); font-size: 10.5px; max-width: 340px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .badge { display: inline-block; padding: 1px 7px; border-radius: 999px; background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); font-size: 10px; }
+  .badge.ghost { border: 1px solid var(--line); background: transparent; color: var(--ink2); }
+
+  .empty { color: var(--ink2); padding: 22px 2px; text-align: center; }
+  /* refetch holds the previous render instead of flashing a skeleton */
+  #content.loading { opacity: .45; transition: opacity .15s; }
+
+  /* ---- tooltip ---- */
+  #tip {
+    position: fixed; z-index: 20; pointer-events: none; opacity: 0; transition: opacity .1s;
+    background: var(--vscode-editorHoverWidget-background, var(--vscode-editorWidget-background));
+    color: var(--vscode-editorHoverWidget-foreground, var(--ink));
+    border: 1px solid var(--vscode-editorHoverWidget-border, var(--line));
+    border-radius: 6px; padding: 9px 11px; font-size: 11.5px; max-width: 340px;
+    box-shadow: 0 3px 12px rgba(0,0,0,.28);
+  }
+  #tip .th { font-weight: 600; margin-bottom: 5px; word-break: break-all; }
+  #tip .tr { display: flex; justify-content: space-between; gap: 16px; line-height: 1.55; }
+  #tip .tk { color: var(--ink2); }
+  #tip .tv { font-variant-numeric: tabular-nums; font-weight: 600; }
+
+  @media (max-width: 820px) {
+    .kpis { grid-template-columns: repeat(2, 1fr); }
+    .pair { grid-template-columns: 1fr; }
+    .chart { grid-template-columns: minmax(80px, 110px) 1fr minmax(96px, 108px); }
+  }
+</style>
+</head>
+<body>
+<div class="shell">
+  <div class="top">
+    <div>
+      <h1>Context Control</h1>
+      <div id="subtitle" class="muted small">Scanning…</div>
+    </div>
+    <button id="refresh">Refresh</button>
+  </div>
+
+  <div class="filters">
+    <div class="chips" id="chips"></div>
+    <input id="search" type="search" placeholder="Search project, source, or path" aria-label="Search sessions" />
+  </div>
+
+  <div id="content">
+    <div class="kpis" id="kpis"></div>
+    <div id="charts"></div>
+    <details class="tableCard" id="tableCard" open>
+      <summary id="tableSummary">All sessions</summary>
+      <div class="tableWrap">
+        <table>
+          <thead><tr>
+            <th data-k="project">Session</th>
+            <th data-k="percentUsed" class="num">Context</th>
+            <th data-k="quotaUsed" class="num">Quota</th>
+            <th data-k="messages" class="num">Msgs</th>
+            <th data-k="totalTokens" class="num">Tokens</th>
+            <th data-k="estimatedCostUsd" class="num">Cost</th>
+            <th data-k="updatedAt" class="num">Updated</th>
+            <th></th>
+          </tr></thead>
+          <tbody id="rows"></tbody>
+        </table>
+      </div>
+    </details>
+  </div>
+</div>
+<div id="tip" role="tooltip"></div>
+
+<script>
+(function () {
+  var vscode = acquireVsCodeApi();
+  var data = [];
+  var th = { warning: 75, critical: 90, quotaWarning: 80, quotaCritical: 95 };
+  var visible = [];
+  var sortKey = "percentUsed";
+  var sortDir = -1;
+  var filter = "all";
+  var query = "";
+  var loaded = false;
+  var CHART_ROWS = 12;
+
+  // ---------- helpers ----------
+  function el(tag, cls, text) {
+    var n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text !== undefined && text !== null) n.textContent = String(text);
+    return n;
+  }
+  function clear(node) { while (node.firstChild) node.removeChild(node.firstChild); }
+  function fmtTok(n) {
+    n = Number(n) || 0;
+    if (n >= 1000000) return (n / 1000000).toFixed(n >= 10000000 ? 0 : 1) + "M";
+    if (n >= 1000) return (n / 1000).toFixed(n >= 100000 ? 0 : 1) + "k";
+    return String(n);
+  }
+  function fmtMoney(n) {
+    n = Number(n) || 0;
+    if (n >= 100) return "$" + n.toFixed(0);
+    return "$" + n.toFixed(2);
+  }
+  function fmtDate(ms) {
+    if (!ms) return "—";
+    var d = new Date(ms);
+    var diff = (Date.now() - ms) / 1000;
+    if (diff < 60) return "just now";
+    if (diff < 3600) return Math.round(diff / 60) + "m ago";
+    if (diff < 86400) return Math.round(diff / 3600) + "h ago";
+    return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+  }
+  function titleCase(v) {
+    if (!v) return "";
+    return v.charAt(0).toUpperCase() + v.slice(1).toLowerCase();
+  }
+  function sourceName(s) {
+    if (s === "claude-code") return "Claude Code";
+    if (s === "codex") return "Codex";
+    if (s === "cline") return "Cline";
+    if (s === "cursor") return "Cursor";
+    return s;
+  }
+  function windowName(minutes) {
+    minutes = Number(minutes) || 0;
+    if (minutes >= 10080 && minutes % 10080 === 0) {
+      var w = minutes / 10080;
+      return w === 1 ? "7d weekly" : w + "w";
+    }
+    if (minutes >= 1440 && minutes % 1440 === 0) {
+      var d = minutes / 1440;
+      return d === 1 ? "1d" : d + "d";
+    }
+    if (minutes >= 60 && minutes % 60 === 0) {
+      var h = minutes / 60;
+      return h === 5 ? "5h session" : h + "h";
+    }
+    if (minutes > 60) return Math.floor(minutes / 60) + "h " + (minutes % 60) + "m";
+    return minutes + "m";
+  }
+  function fmtReset(resetsAt) {
+    if (!resetsAt) return "";
+    var sec = resetsAt - Math.floor(Date.now() / 1000);
+    if (sec <= 0) return "resetting now";
+    var mins = Math.round(sec / 60);
+    if (mins < 60) return "resets in " + mins + "m";
+    return "resets in " + Math.floor(mins / 60) + "h " + (mins % 60) + "m";
+  }
+  function quotaUsed(s) {
+    var rl = s.rateLimits;
+    var p = rl && rl.primary ? Number(rl.primary.usedPercent) || 0 : 0;
+    var q = rl && rl.secondary ? Number(rl.secondary.usedPercent) || 0 : 0;
+    return Math.max(p, q);
+  }
+  function quotaLevel(pct) {
+    if (pct >= th.quotaCritical) return "critical";
+    if (pct >= th.quotaWarning) return "warning";
+    return "ok";
+  }
+  function levelLabel(level) {
+    if (level === "critical") return "Critical";
+    if (level === "warning") return "Warning";
+    return "OK";
+  }
+
+  // ---------- tooltip ----------
+  var tip = document.getElementById("tip");
+  function tipShow(title, rows, ev) {
+    clear(tip);
+    tip.appendChild(el("div", "th", title));
+    for (var i = 0; i < rows.length; i++) {
+      var r = el("div", "tr");
+      r.appendChild(el("span", "tk", rows[i][0]));
+      r.appendChild(el("span", "tv", rows[i][1]));
+      tip.appendChild(r);
+    }
+    tip.style.opacity = "1";
+    tipMove(ev);
+  }
+  function tipMove(ev) {
+    if (!ev) return;
+    var pad = 14;
+    var r = tip.getBoundingClientRect();
+    var x = ev.clientX + pad;
+    var y = ev.clientY + pad;
+    if (x + r.width > window.innerWidth - 8) x = ev.clientX - r.width - pad;
+    if (y + r.height > window.innerHeight - 8) y = ev.clientY - r.height - pad;
+    tip.style.left = Math.max(8, x) + "px";
+    tip.style.top = Math.max(8, y) + "px";
+  }
+  function tipHide() { tip.style.opacity = "0"; }
+  function bindTip(node, title, rowsFn) {
+    node.addEventListener("pointerenter", function (e) { tipShow(title, rowsFn(), e); });
+    node.addEventListener("pointermove", tipMove);
+    node.addEventListener("pointerleave", tipHide);
+    node.addEventListener("focus", function () {
+      var r = node.getBoundingClientRect();
+      tipShow(title, rowsFn(), { clientX: r.left + r.width / 2, clientY: r.bottom });
+    });
+    node.addEventListener("blur", tipHide);
+  }
+
+  // ---------- meter ----------
+  function meter(percent, level, rules) {
+    var m = el("div", "meter lv-" + level);
+    var fill = el("div", "fill");
+    fill.style.width = Math.max(0, Math.min(100, percent)) + "%";
+    m.appendChild(fill);
+    if (rules) {
+      for (var i = 0; i < rules.length; i++) {
+        var r = el("div", "rule");
+        r.style.left = rules[i] + "%";
+        m.appendChild(r);
+      }
+    }
+    return m;
+  }
+
+  // ---------- filters ----------
+  function matches(s) {
+    if (filter === "critical" && s.level !== "critical") return false;
+    if (filter === "warning" && s.level !== "warning") return false;
+    if (filter === "quota" && quotaUsed(s) <= 0) return false;
+    if (!query) return true;
+    return (s.project + " " + s.source + " " + s.file).toLowerCase().indexOf(query) >= 0;
+  }
+  function renderChips() {
+    var defs = [
+      { k: "all", label: "All", n: data.length },
+      { k: "critical", label: "Critical", n: data.filter(function (s) { return s.level === "critical"; }).length },
+      { k: "warning", label: "Warning", n: data.filter(function (s) { return s.level === "warning"; }).length },
+      { k: "quota", label: "Has quota", n: data.filter(function (s) { return quotaUsed(s) > 0; }).length }
+    ];
+    var box = document.getElementById("chips");
+    clear(box);
+    defs.forEach(function (d) {
+      var b = el("button", "chip", d.label + " " + d.n);
+      b.setAttribute("aria-pressed", filter === d.k ? "true" : "false");
+      b.addEventListener("click", function () { filter = d.k; render(); });
+      box.appendChild(b);
+    });
+  }
+
+  // ---------- KPI tiles ----------
+  function kpi(label, value, sub) {
+    var c = el("div", "kpi");
+    c.appendChild(el("div", "label", label));
+    c.appendChild(el("div", "value", value));
+    c.appendChild(el("div", "sub", sub || "\\u00a0"));
+    return c;
+  }
+  function renderKpis(rows) {
+    var box = document.getElementById("kpis");
+    clear(box);
+    if (!rows.length) {
+      box.appendChild(kpi("Sessions", "0", "nothing scanned"));
+      box.appendChild(kpi("Highest context", "—", ""));
+      box.appendChild(kpi("Needs attention", "—", ""));
+      box.appendChild(kpi("Highest quota", "—", ""));
+      return;
+    }
+    var top = rows.reduce(function (a, b) { return b.percentUsed > a.percentUsed ? b : a; });
+    var attention = rows.filter(function (s) { return s.level !== "ok"; }).length;
+    var q = rows.reduce(function (a, b) { return quotaUsed(b) > quotaUsed(a) ? b : a; });
+    var qv = quotaUsed(q);
+    var cost = rows.reduce(function (a, s) { return a + (Number(s.estimatedCostUsd) || 0); }, 0);
+
+    box.appendChild(kpi("Sessions", String(rows.length), "across " + new Set(rows.map(function (s) { return s.source; })).size + " tool(s)"));
+    box.appendChild(kpi("Highest context", top.percentUsed.toFixed(1) + "%", top.project));
+    box.appendChild(kpi("Needs attention", String(attention), attention ? "at or past " + th.warning + "%" : "all below " + th.warning + "%"));
+    box.appendChild(kpi(qv > 0 ? "Highest quota" : "Estimated cost", qv > 0 ? Math.round(qv) + "%" : fmtMoney(cost), qv > 0 ? q.project : "all sessions"));
+  }
+
+  // ---------- chart: context usage by session ----------
+  function contextChart(rows) {
+    var card = el("div", "card");
+    card.appendChild(el("h2", null, "Context usage by session"));
+    card.appendChild(el("div", "sub", "Share of each model's context window that is already in use. Rules mark the warning and critical thresholds."));
+
+    if (!rows.length) {
+      card.appendChild(el("div", "empty", loaded ? "No sessions match this filter." : "Scanning…"));
+      return card;
+    }
+
+    var shown = rows.slice(0, CHART_ROWS);
+    var chart = el("div", "chart");
+
+    // shared 0-100% axis, drawn once above the meters
+    chart.appendChild(el("div"));
+    var ticks = el("div", "ticks");
+    [[0, "0%", "first"], [th.warning, th.warning + "%", ""], [th.critical, th.critical + "%", ""], [100, "100%", "last"]]
+      .forEach(function (t) {
+        var sp = el("span", t[2], t[1]);
+        sp.style.left = t[0] + "%";
+        ticks.appendChild(sp);
+      });
+    chart.appendChild(ticks);
+    chart.appendChild(el("div"));
+
+    shown.forEach(function (s) {
+      var name = el("div", "rowName hoverable");
+      name.appendChild(el("div", "n", s.project));
+      name.appendChild(el("div", "s", sourceName(s.source)));
+      name.tabIndex = 0;
+
+      var m = meter(s.percentUsed, s.level, [th.warning, th.critical]);
+
+      var val = el("div", "rowVal");
+      val.appendChild(el("span", "v", s.percentUsed.toFixed(1) + "%"));
+      val.appendChild(el("span", "tag", levelLabel(s.level)));
+
+      var rowsFn = function () {
+        return [
+          ["Context", s.percentUsed.toFixed(1) + "% (" + levelLabel(s.level) + ")"],
+          ["Tokens", fmtTok(s.totalTokens) + " / " + fmtTok(s.modelLimit)],
+          ["Messages", String(s.messages)],
+          ["Est. cost", fmtMoney(s.estimatedCostUsd)],
+          ["Token source", s.tokenSource === "usage" ? "real usage" : "estimated"],
+          ["Updated", fmtDate(s.updatedAt)]
+        ];
+      };
+      [name, m, val].forEach(function (n) { bindTip(n, s.project + " · " + sourceName(s.source), rowsFn); });
+
+      chart.appendChild(name);
+      chart.appendChild(m);
+      chart.appendChild(val);
+    });
+
+    card.appendChild(chart);
+
+    if (rows.length > shown.length) {
+      card.appendChild(el("div", "muted small", "+ " + (rows.length - shown.length) + " more in the table below"));
+    }
+
+    var legend = el("div", "legend");
+    [["var(--ok)", "OK — below " + th.warning + "%"],
+     ["var(--warn)", "Warning — " + th.warning + "% and above"],
+     ["var(--crit)", "Critical — " + th.critical + "% and above"]]
+      .forEach(function (l) {
+        var item = el("div", "item");
+        var sw = el("span", "swatch");
+        sw.style.background = l[0];
+        item.appendChild(sw);
+        item.appendChild(el("span", null, l[1]));
+        legend.appendChild(item);
+      });
+    var ruleItem = el("div", "item");
+    ruleItem.appendChild(el("span", "swatch rule"));
+    ruleItem.appendChild(el("span", null, "threshold"));
+    legend.appendChild(ruleItem);
+    card.appendChild(legend);
+    return card;
+  }
+
+  // ---------- chart: provider quota ----------
+  function quotaChart(rows) {
+    var card = el("div", "card");
+    card.appendChild(el("h2", null, "Provider quota"));
+
+    var withQuota = rows.filter(function (s) { return quotaUsed(s) > 0; });
+    if (!withQuota.length) {
+      card.appendChild(el("div", "sub", "The rolling limit that locks you out for hours."));
+      card.appendChild(el("div", "empty small", "Not reported by these sessions. Codex reports its 5-hour and weekly limits."));
+      return card;
+    }
+
+    var s = withQuota.reduce(function (a, b) { return quotaUsed(b) > quotaUsed(a) ? b : a; });
+    var rl = s.rateLimits || {};
+    card.appendChild(el("div", "sub", sourceName(s.source) + (rl.planType ? " · " + titleCase(rl.planType) + " plan" : "") + " · " + s.project));
+
+    var chart = el("div", "chart");
+    [["Primary", rl.primary], ["Secondary", rl.secondary]].forEach(function (pair) {
+      var w = pair[1];
+      if (!w) return;
+      var pct = Number(w.usedPercent) || 0;
+      var lvl = quotaLevel(pct);
+
+      var name = el("div", "rowName");
+      name.appendChild(el("div", "n", windowName(w.windowMinutes)));
+      name.appendChild(el("div", "s", pair[0]));
+      name.tabIndex = 0;
+
+      var m = meter(pct, lvl, [th.quotaWarning, th.quotaCritical]);
+      var val = el("div", "rowVal");
+      val.appendChild(el("span", "v", Math.round(pct) + "%"));
+      val.appendChild(el("span", "tag", levelLabel(lvl)));
+
+      var rowsFn = function () {
+        var out = [["Used", Math.round(pct) + "% (" + levelLabel(lvl) + ")"], ["Window", windowName(w.windowMinutes)]];
+        var r = fmtReset(w.resetsAt);
+        if (r) out.push(["Resets", r]);
+        return out;
+      };
+      [name, m, val].forEach(function (n) { bindTip(n, pair[0] + " quota", rowsFn); });
+
+      chart.appendChild(name);
+      chart.appendChild(m);
+      chart.appendChild(val);
+    });
+    card.appendChild(chart);
+
+    var reset = fmtReset((rl.primary && rl.primary.resetsAt) || (rl.secondary && rl.secondary.resetsAt));
+    if (reset) {
+      var line = el("div", "muted small");
+      line.id = "resetLine";
+      line.style.marginTop = "12px";
+      line.textContent = reset;
+      card.appendChild(line);
+    }
+    return card;
+  }
+
+  // ---------- chart: estimated cost by project ----------
+  function costChart(rows) {
+    var card = el("div", "card");
+    card.appendChild(el("h2", null, "Estimated cost by project"));
+    card.appendChild(el("div", "sub", "From real billed token counts, where the provider reports them."));
+
+    var byProject = {};
+    rows.forEach(function (s) {
+      var c = Number(s.estimatedCostUsd) || 0;
+      if (c <= 0) return;
+      byProject[s.project] = (byProject[s.project] || 0) + c;
+    });
+    var list = Object.keys(byProject)
+      .map(function (k) { return { project: k, cost: byProject[k] }; })
+      .sort(function (a, b) { return b.cost - a.cost; })
+      .slice(0, 6);
+
+    if (!list.length) {
+      card.appendChild(el("div", "empty small", "No priced usage yet. Codex sessions report tokens but not pricing."));
+      return card;
+    }
+
+    var max = list[0].cost;
+    var chart = el("div", "chart");
+    list.forEach(function (p) {
+      var name = el("div", "rowName");
+      name.appendChild(el("div", "n", p.project));
+      name.tabIndex = 0;
+      // single series, single hue: length is the only encoding
+      var m = meter((p.cost / max) * 100, "accent", null);
+      var val = el("div", "rowVal");
+      val.appendChild(el("span", "v", fmtMoney(p.cost)));
+      var rowsFn = function () {
+        return [["Estimated cost", fmtMoney(p.cost)], ["Share of shown", Math.round((p.cost / max) * 100) + "% of largest"]];
+      };
+      [name, m, val].forEach(function (n) { bindTip(n, p.project, rowsFn); });
+      chart.appendChild(name);
+      chart.appendChild(m);
+      chart.appendChild(val);
+    });
+    card.appendChild(chart);
+    return card;
+  }
+
+  // ---------- table twin ----------
+  function renderTable(rows) {
+    var tbody = document.getElementById("rows");
+    clear(tbody);
+    document.getElementById("tableSummary").textContent =
+      "All sessions (" + rows.length + ")" + (rows.length ? " — every value, sortable" : "");
+
+    if (!rows.length) {
+      var tr = el("tr");
+      var td = el("td", "empty");
+      td.colSpan = 8;
+      td.textContent = loaded ? "No sessions match this filter." : "Scanning…";
+      tr.appendChild(td);
+      tbody.appendChild(tr);
+      return;
+    }
+
+    rows.forEach(function (s) {
+      var tr = el("tr");
+
+      var td1 = el("td");
+      td1.appendChild(el("div", null, s.project));
+      td1.appendChild(el("div", "path", s.file));
+      var badges = el("div");
+      badges.style.marginTop = "3px";
+      var b1 = el("span", "badge", sourceName(s.source));
+      var b2 = el("span", "badge ghost", s.tokenSource === "usage" ? "real tokens" : "estimated");
+      b2.style.marginLeft = "5px";
+      badges.appendChild(b1);
+      badges.appendChild(b2);
+      td1.appendChild(badges);
+      tr.appendChild(td1);
+
+      tr.appendChild(el("td", "num", s.percentUsed.toFixed(1) + "% " + levelLabel(s.level)));
+      var qv = quotaUsed(s);
+      tr.appendChild(el("td", "num", qv > 0 ? Math.round(qv) + "% " + levelLabel(quotaLevel(qv)) : "—"));
+      tr.appendChild(el("td", "num", String(s.messages)));
+      tr.appendChild(el("td", "num", fmtTok(s.totalTokens) + " / " + fmtTok(s.modelLimit)));
+      tr.appendChild(el("td", "num", fmtMoney(s.estimatedCostUsd)));
+      tr.appendChild(el("td", "num", fmtDate(s.updatedAt)));
+
+      var tdb = el("td");
+      var btn = el("button", "secondary", "Handoff");
+      btn.addEventListener("click", function () {
+        vscode.postMessage({ command: "handoff", file: s.file, source: s.source });
+      });
+      tdb.appendChild(btn);
+      tr.appendChild(tdb);
+
+      tbody.appendChild(tr);
+    });
+  }
+
+  // ---------- render ----------
+  function render() {
+    renderChips();
+    var rows = data.filter(matches);
+
+    var sorted = rows.slice().sort(function (a, b) {
+      var x = sortKey === "quotaUsed" ? quotaUsed(a) : a[sortKey];
+      var y = sortKey === "quotaUsed" ? quotaUsed(b) : b[sortKey];
+      if (typeof x === "string") return sortDir * String(x).localeCompare(String(y));
+      return sortDir * ((Number(x) || 0) - (Number(y) || 0));
+    });
+    visible = sorted;
+
+    renderKpis(rows);
+
+    var charts = document.getElementById("charts");
+    clear(charts);
+    var byUsage = rows.slice().sort(function (a, b) { return b.percentUsed - a.percentUsed; });
+    charts.appendChild(contextChart(byUsage));
+    var pair = el("div", "pair");
+    pair.appendChild(quotaChart(rows));
+    pair.appendChild(costChart(rows));
+    charts.appendChild(pair);
+
+    renderTable(sorted);
+
+    var sub = document.getElementById("subtitle");
+    sub.textContent = loaded
+      ? data.length + " session" + (data.length === 1 ? "" : "s") + " · refreshed " + new Date().toLocaleTimeString()
+      : "Scanning…";
+  }
+
+  // ---------- wiring ----------
+  var ths = document.querySelectorAll("th[data-k]");
+  for (var k = 0; k < ths.length; k++) {
+    (function (node) {
+      node.addEventListener("click", function () {
+        var key = node.getAttribute("data-k");
+        if (sortKey === key) sortDir = -sortDir; else { sortKey = key; sortDir = -1; }
+        render();
+      });
+    })(ths[k]);
+  }
+  document.getElementById("search").addEventListener("input", function (e) {
+    query = e.target.value.toLowerCase().trim();
+    render();
+  });
+  document.getElementById("refresh").addEventListener("click", function () {
+    vscode.postMessage({ command: "refresh" });
+  });
+  window.addEventListener("message", function (ev) {
+    var msg = ev.data;
+    if (!msg) return;
+    if (msg.type === "loading") {
+      document.getElementById("content").classList.add("loading");
+      return;
+    }
+    if (msg.type === "data") {
+      document.getElementById("content").classList.remove("loading");
+      data = msg.sessions || [];
+      if (msg.thresholds) th = msg.thresholds;
+      loaded = true;
+      render();
+    }
+  });
+
+  // keep the quota reset countdown honest between refreshes
+  setInterval(function () {
+    var line = document.getElementById("resetLine");
+    if (!line) return;
+    var s = data.filter(function (x) { return quotaUsed(x) > 0; })[0];
+    if (!s || !s.rateLimits) return;
+    var w = s.rateLimits.primary || s.rateLimits.secondary;
+    var t = fmtReset(w && w.resetsAt);
+    if (t) line.textContent = t;
+  }, 30000);
+
+  render();
+}());
+</script>
+</body>
+</html>`;
+  }
+}
