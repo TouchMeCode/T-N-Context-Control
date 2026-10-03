@@ -4,6 +4,7 @@ src/**
 out/**
 test/**
 docs/**
+tools/**
 **/*.ts
 **/*.map
 .gitignore

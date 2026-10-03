@@ -13,7 +13,8 @@ Everything runs **100% locally**. No conversation ever leaves your machine.
 
 - Reads conversation history from local storage (no API keys, no network).
 - Tracks token usage against the model's real context window.
-- Shows a live status bar item (`$(pulse) CC: 45% 116k/258k`).
+- Shows an explicit live context reading (`CC Ctx: 45%`) and, when reported,
+  a separate provider-quota reading (`CC Quota: LIMIT · Ctx: 76.1%`).
 - Warns at a configurable threshold, alerts when critical.
 - Predicts how many messages remain until critical, and estimates cost.
 - A **Cockpit** side panel with live gauges: context usage **and** your provider
@@ -23,8 +24,9 @@ Everything runs **100% locally**. No conversation ever leaves your machine.
   with the warning/critical thresholds drawn on the track, provider-quota
   meters with a live reset countdown, and estimated cost by project — with the
   full sortable table underneath.
-- Generates a structured handoff (`.md`) with goal, progress, decisions,
-  pending TODOs, referenced files, and a suggested next prompt.
+- Generates a structured handoff (`.md`) with the initial/latest request,
+  model-switch history, decisions, TODOs, referenced files, and a compact
+  timeline covering every meaningful user/assistant turn.
 
 ## Token counting
 
@@ -56,8 +58,8 @@ code --install-extension tn-control.tn-context-control
 
 1. Install the extension and **reload** the window.
 2. Open a folder where you use an AI coding assistant (Claude Code / Codex / Cline).
-3. A status bar item appears bottom-right, e.g. `$(pulse) CC: 45% 116k/258k`
-   — that's your current context usage. Hover it for tokens/message, an estimate
+3. A status bar item appears bottom-right, e.g. `CC Ctx: 45% 116k/258k`
+   — `Ctx` is your current context-window usage, not your account quota. Hover it for tokens/message, an estimate
    of how many messages remain until critical, and cost.
 4. It turns **yellow** at the warning threshold and **red** when critical.
 5. Run a command (`Ctrl+Shift+P` → type “Context Control”):
@@ -96,7 +98,7 @@ Press **F5** to launch an Extension Development Host.
 | `contextControl.quotaWarningThreshold` | `80` | % provider quota that triggers a warning |
 | `contextControl.quotaCriticalThreshold` | `95` | % provider quota that triggers a critical alert |
 | `contextControl.outputDir` | `.ai-memory` | Where handoff files are written (relative to workspace) |
-| `contextControl.adapters` | `["claude-code", "cline", "codex"]` | Which adapters to enable |
+| `contextControl.adapters` | `["claude-code", "codex"]` | Which adapters to enable; Cline is available as an opt-in preview |
 
 ## Supported adapters
 
@@ -104,7 +106,7 @@ Press **F5** to launch an Extension Development Host.
 |---------|--------|
 | **Claude Code** | ✅ Verified against real storage (`~/.claude/projects/*.jsonl`) |
 | **Codex CLI** | ✅ Verified against real storage (`~/.codex/sessions/**/rollout-*.jsonl`). Uses the provider-reported `model_context_window`. Cost is not estimated (no GPT pricing table). |
-| **Cline** | ⚠️ Implemented from public docs, **not yet verified**. See `// TODO:` markers in `src/adapters/cline.ts`. |
+| **Cline** | ⚠️ Opt-in preview implemented from public docs, **not yet verified**. See `// TODO:` markers in `src/adapters/cline.ts`. |
 
 ## Known limitations
 
@@ -119,11 +121,11 @@ Press **F5** to launch an Extension Development Host.
 - Cost is estimated from published Claude prices (Opus $5/$25, Sonnet $3/$15,
   Haiku $1/$5 per 1M; cache read ×0.1, write ×1.25–2.0). GPT/other providers are
   not priced.
-- **Session quota** (the rolling 5-hour / weekly limit that locks you out) is only
-  available for **Codex**, which records it in its local session files. Claude Code
-  does not store its quota locally, so Claude sessions show **context usage only**
-  (check Claude's own Account & Usage panel for its quota). Context tracking and
-  the near-limit handoff work for every adapter.
+- **Live session-quota percentages** are available from Codex. Claude Code does
+  not expose the percentage leading up to its limit, but its local transcript
+  records a rejection when the 5-hour or weekly limit is actually hit; Context
+  Control shows that as `Quota: LIMIT` and clears it after reset or a successful
+  response. Context and quota are always labelled separately.
 
 ## Reporting a problem
 

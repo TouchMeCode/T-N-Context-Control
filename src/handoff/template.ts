@@ -9,9 +9,11 @@ export interface HandoffData {
   percent: number;
   goal: string;
   progress: string;
+  models: string;
   decisions: string;
   pendingTasks: string;
   files: string;
+  conversation: string;
   nextPrompt: string;
 }
 
@@ -22,11 +24,14 @@ export const HANDOFF_TEMPLATE = `# Project Handoff
 **Messages:** {{messageCount}}
 **Tokens:** {{tokens}} / {{limit}} ({{percent}}%)
 
-## Goal
+## Primary and Latest Request
 {{goal}}
 
-## Current Progress
+## Session Snapshot
 {{progress}}
+
+## Models Used
+{{models}}
 
 ## Important Decisions
 {{decisions}}
@@ -37,7 +42,10 @@ export const HANDOFF_TEMPLATE = `# Project Handoff
 ## Files Referenced
 {{files}}
 
-## Recommended Next Prompt
+## Conversation Timeline
+{{conversation}}
+
+## Continuation Prompt
 {{nextPrompt}}
 `;
 

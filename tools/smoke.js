@@ -29,7 +29,7 @@ function disposable() {
 
 // Mirrors the defaults in package.json's `contributes.configuration`.
 const CONFIG = {
-  adapters: ["claude-code", "cline", "codex"],
+  adapters: ["claude-code", "codex"],
   warningThreshold: 75,
   criticalThreshold: 90,
   quotaWarningThreshold: 80,
