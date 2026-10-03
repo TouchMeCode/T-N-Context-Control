@@ -13,6 +13,8 @@ export interface SessionSummary {
   level: Level;
   estimatedCostUsd: number;
   tokenSource: "usage" | "estimate";
+  model?: string;
+  models: string[];
   rateLimits?: RateLimits;
   updatedAt: number;
 }
@@ -444,7 +446,7 @@ export class Dashboard {
     if (filter === "warning" && s.level !== "warning") return false;
     if (filter === "quota" && quotaUsed(s) <= 0) return false;
     if (!query) return true;
-    return (s.project + " " + s.source + " " + s.file).toLowerCase().indexOf(query) >= 0;
+    return (s.project + " " + s.source + " " + s.file + " " + (s.models || []).join(" ")).toLowerCase().indexOf(query) >= 0;
   }
   function renderChips() {
     var defs = [
@@ -522,7 +524,9 @@ export class Dashboard {
     shown.forEach(function (s) {
       var name = el("div", "rowName hoverable");
       name.appendChild(el("div", "n", s.project));
-      name.appendChild(el("div", "s", sourceName(s.source)));
+      var modelLine = sourceName(s.source) + (s.model ? " · " + s.model : "");
+      if (s.models && s.models.length > 1) modelLine += " · " + s.models.length + " models";
+      name.appendChild(el("div", "s", modelLine));
       name.tabIndex = 0;
 
       var m = meter(s.percentUsed, s.level, [th.warning, th.critical]);
@@ -536,6 +540,7 @@ export class Dashboard {
           ["Context", s.percentUsed.toFixed(1) + "% (" + levelLabel(s.level) + ")"],
           ["Tokens", fmtTok(s.totalTokens) + " / " + fmtTok(s.modelLimit)],
           ["Messages", String(s.messages)],
+          ["Models", s.models && s.models.length ? s.models.join(" → ") : "not reported"],
           ["Est. cost", fmtMoney(s.estimatedCostUsd)],
           ["Token source", s.tokenSource === "usage" ? "real usage" : "estimated"],
           ["Updated", fmtDate(s.updatedAt)]
@@ -706,6 +711,11 @@ export class Dashboard {
       b2.style.marginLeft = "5px";
       badges.appendChild(b1);
       badges.appendChild(b2);
+      if (s.model) {
+        var b3 = el("span", "badge ghost", s.model + (s.models.length > 1 ? " · " + s.models.length + " models" : ""));
+        b3.style.marginLeft = "5px";
+        badges.appendChild(b3);
+      }
       td1.appendChild(badges);
       tr.appendChild(td1);
 

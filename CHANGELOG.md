@@ -32,6 +32,10 @@ every write.
 - **The dashboard yields between sessions and can be cancelled.** Scanning up
   to 50 sessions no longer freezes the UI, and its progress notification's
   Cancel button now actually stops the scan.
+- **Dashboard summaries are cached by path, mtime, and size.** An unchanged
+  warm dashboard now performs file stats instead of re-parsing sessions whose
+  message caches were evicted. On the 205MB real-session smoke set, warm scans
+  measured **16–28 ms** instead of **6.6 s**.
 
 ### Fixed — reliability
 
@@ -45,6 +49,15 @@ every write.
   chokidar could surface as an unhandled error in the extension host.
 - **Handoffs generated from the dashboard report their failures** instead of
   rejecting silently out of the webview message handler.
+- **Handoffs now carry the actual conversation.** Harness/XML noise is removed,
+  every meaningful user/assistant turn is represented in a compact timeline,
+  the latest user request drives the continuation prompt, and model switches
+  are recorded. This replaces the misleading first-message/latest-assistant
+  heuristic.
+- **Claude Code limit rejections are detected.** Five-hour and weekly lockouts
+  recorded in Claude's local JSONL now surface as provider quota. The status
+  bar labels context (`Ctx`) and quota separately and shows `Quota: LIMIT`
+  instead of making a 76% context reading look like account quota.
 
 ### Added
 
@@ -70,6 +83,8 @@ every write.
 - **Icon downscaled** from 1254×1254 to 256×256 (935KB → 45KB).
 - Together these take the packaged extension from **11.7MB to under 0.5MB**.
 - `qna` set to `marketplace`, so the listing has a working place to report bugs.
+- Cline is no longer enabled by default because no real installation was
+  available to verify its documented storage schema; it remains opt-in.
 
 ## [0.2.2]
 

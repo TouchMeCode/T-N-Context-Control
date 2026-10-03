@@ -187,13 +187,19 @@ export class CodexAdapter extends BaseAdapter {
       if (!content) {
         continue;
       }
-      state.messages.push({
+      const message: NormalizedMessage = {
         id: filePath + ":" + state.messages.length,
         role: this.roleFor(ptype, payload),
         content,
         timestamp: ts,
         source: this.name,
-      });
+      };
+      // Keep the model active for this turn on the message itself. This
+      // preserves A → B → A switches for handoffs and per-model reporting.
+      if (state.model) {
+        message.metadata = { model: state.model };
+      }
+      state.messages.push(message);
     }
 
     this.attachSessionMetadata(state);
@@ -205,7 +211,8 @@ export class CodexAdapter extends BaseAdapter {
    * Hang the real window + current context size off the newest message so the
    * analyzer can report accurate usage. Codex uses GPT models, for which we
    * have no pricing table, so usage/cost is intentionally left unset. The
-   * newest message moves as the file grows, so clear the previous holder.
+   * newest message moves as the file grows, so clear the previous holder's
+   * session-level fields. Per-turn model metadata deliberately stays put.
    */
   private attachSessionMetadata(state: ParseState): void {
     if (state.messages.length === 0) {
@@ -221,7 +228,6 @@ export class CodexAdapter extends BaseAdapter {
     }
     const last = state.messages[state.messages.length - 1];
     if (state.attachedTo && state.attachedTo !== last && state.attachedTo.metadata) {
-      delete state.attachedTo.metadata.model;
       delete state.attachedTo.metadata.contextWindow;
       delete state.attachedTo.metadata.contextTokens;
       delete state.attachedTo.metadata.rateLimits;

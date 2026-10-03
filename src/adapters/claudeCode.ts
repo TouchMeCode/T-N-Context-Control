@@ -3,7 +3,13 @@ import * as os from "os";
 import * as path from "path";
 import { BaseAdapter } from "./base";
 import { JsonlTailReader } from "../core/jsonlTail";
-import type { NormalizedMessage, Role, Source } from "../core/types";
+import type {
+  NormalizedMessage,
+  RateLimits,
+  RateLimitWindow,
+  Role,
+  Source,
+} from "../core/types";
 import type { UsageBreakdown } from "../core/pricing";
 
 /**
@@ -48,6 +54,13 @@ interface ClaudeRecord {
   snapshot?: {
     trackedFileBackups?: Record<string, unknown>;
   };
+  error?: string;
+  apiErrorStatus?: number;
+  quotaLimits?: {
+    status?: string;
+    resetsAt?: number;
+    rateLimitType?: string;
+  };
 }
 
 const KEEP_TYPES = new Set(["user", "assistant"]);
@@ -59,8 +72,12 @@ const PARSE_CACHE_LIMIT = 12;
 interface ParseState {
   messages: NormalizedMessage[];
   editedFiles: Set<string>;
+  rateLimits?: RateLimits;
+  quotaObservedAt: { primary?: number; secondary?: number };
   /** Message the edited-file list is currently attached to, so we can move it. */
   attachedTo?: NormalizedMessage;
+  /** Message the current provider-quota state is attached to. */
+  quotaAttachedTo?: NormalizedMessage;
 }
 
 export class ClaudeCodeAdapter extends BaseAdapter {
@@ -162,10 +179,16 @@ export class ClaudeCodeAdapter extends BaseAdapter {
 
     let state = this.states.get(filePath);
     if (!state || fromStart) {
-      state = { messages: [], editedFiles: new Set<string>() };
+      state = {
+        messages: [],
+        editedFiles: new Set<string>(),
+        quotaObservedAt: {},
+      };
       this.states.set(filePath, state);
     }
     if (lines.length === 0) {
+      this.expireQuota(state);
+      this.attachQuota(state);
       return state.messages;
     }
 
@@ -202,20 +225,22 @@ export class ClaudeCodeAdapter extends BaseAdapter {
 
       const role = this.normalizeRole(rec.message.role, rec.type);
       const content = this.flattenContent(rec.message.content);
+      const timestamp = rec.timestamp ? Date.parse(rec.timestamp) : Date.now();
       const msg: NormalizedMessage = {
         id: rec.uuid ?? `${filePath}:${state.messages.length}`,
         role,
         content,
-        timestamp: rec.timestamp ? Date.parse(rec.timestamp) : Date.now(),
+        timestamp,
         source: this.name,
       };
 
       const contextTokens = this.contextTokens(rec.message.usage);
       const usage = this.usageBreakdown(rec.message.usage);
-      if (rec.message.model || contextTokens !== undefined || usage) {
+      const model = rec.message.model === "<synthetic>" ? undefined : rec.message.model;
+      if (model || contextTokens !== undefined || usage) {
         msg.metadata = {};
-        if (rec.message.model) {
-          msg.metadata.model = rec.message.model;
+        if (model) {
+          msg.metadata.model = model;
         }
         if (contextTokens !== undefined) {
           msg.metadata.contextTokens = contextTokens;
@@ -225,9 +250,22 @@ export class ClaudeCodeAdapter extends BaseAdapter {
         }
       }
       state.messages.push(msg);
+
+      const quota = this.quotaFromRecord(rec, content);
+      if (quota) {
+        state.rateLimits = state.rateLimits ?? {};
+        state.rateLimits[quota.slot] = quota.window;
+        state.quotaObservedAt[quota.slot] = Math.floor(timestamp / 1000);
+      } else if (this.isSuccessfulAssistant(rec)) {
+        // A real response after a rejection proves the lockout has ended.
+        state.rateLimits = undefined;
+        state.quotaObservedAt = {};
+      }
     }
 
+    this.expireQuota(state);
     this.attachEditedFiles(state);
+    this.attachQuota(state);
     this.prune();
     return state.messages;
   }
@@ -253,6 +291,85 @@ export class ClaudeCodeAdapter extends BaseAdapter {
     last.metadata = last.metadata ?? {};
     last.metadata.filesReferenced = [...state.editedFiles];
     state.attachedTo = last;
+  }
+
+  /** Move the latest Claude quota state to the newest message, without stale copies. */
+  private attachQuota(state: ParseState): void {
+    if (state.quotaAttachedTo?.metadata) {
+      delete state.quotaAttachedTo.metadata.rateLimits;
+    }
+    state.quotaAttachedTo = undefined;
+    if (!state.rateLimits || (!state.rateLimits.primary && !state.rateLimits.secondary)) {
+      return;
+    }
+    const last = state.messages[state.messages.length - 1];
+    if (!last) {
+      return;
+    }
+    last.metadata = last.metadata ?? {};
+    last.metadata.rateLimits = state.rateLimits;
+    state.quotaAttachedTo = last;
+  }
+
+  /** Claude records a rejected limit even though it does not expose live percentages. */
+  private quotaFromRecord(
+    rec: ClaudeRecord,
+    content: string
+  ): { slot: "primary" | "secondary"; window: RateLimitWindow } | undefined {
+    const rejected = rec.error === "rate_limit" || rec.apiErrorStatus === 429;
+    if (!rejected) {
+      return undefined;
+    }
+    const kind = rec.quotaLimits?.rateLimitType?.toLowerCase() ?? "";
+    const weekly = /week|seven[_-]?day/.test(kind) || /weekly limit/i.test(content);
+    const session = /five[_-]?hour|session/.test(kind) || /session limit/i.test(content);
+    if (!weekly && !session) {
+      return undefined;
+    }
+    return {
+      slot: weekly ? "secondary" : "primary",
+      window: {
+        usedPercent: 100,
+        windowMinutes: weekly ? 10_080 : 300,
+        resetsAt:
+          typeof rec.quotaLimits?.resetsAt === "number"
+            ? rec.quotaLimits.resetsAt
+            : undefined,
+      },
+    };
+  }
+
+  private isSuccessfulAssistant(rec: ClaudeRecord): boolean {
+    return (
+      rec.type === "assistant" &&
+      rec.error !== "rate_limit" &&
+      rec.apiErrorStatus !== 429 &&
+      Boolean(rec.message?.model && rec.message.model !== "<synthetic>")
+    );
+  }
+
+  /** Drop a rejected-limit marker after its reset (or one full window as fallback). */
+  private expireQuota(state: ParseState): void {
+    if (!state.rateLimits) {
+      return;
+    }
+    const now = Math.floor(Date.now() / 1000);
+    for (const slot of ["primary", "secondary"] as const) {
+      const window = state.rateLimits[slot];
+      if (!window) {
+        continue;
+      }
+      const observed = state.quotaObservedAt[slot];
+      const expiresAt = window.resetsAt ??
+        (observed === undefined ? undefined : observed + window.windowMinutes * 60);
+      if (expiresAt !== undefined && expiresAt <= now) {
+        delete state.rateLimits[slot];
+        delete state.quotaObservedAt[slot];
+      }
+    }
+    if (!state.rateLimits.primary && !state.rateLimits.secondary) {
+      state.rateLimits = undefined;
+    }
   }
 
   /** Bound memory: keep only the most recently parsed session files. */

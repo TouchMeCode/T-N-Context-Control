@@ -17,7 +17,15 @@ export class StatusBar {
   update(stats: ContextStats): void {
     const used = this.fmt(stats.totalTokens);
     const limit = this.fmt(stats.modelLimit);
-    this.item.text = `$(pulse) CC: ${stats.percentUsed}% ${used}/${limit}`;
+    const quotaPercent = this.maxQuotaPercent(stats);
+    const quotaLevel = this.quotaLevel(quotaPercent);
+    if (quotaPercent !== undefined) {
+      const quotaText = quotaPercent >= 100 ? "LIMIT" : `${Math.round(quotaPercent)}%`;
+      const icon = quotaLevel === "critical" ? "$(error)" : "$(pulse)";
+      this.item.text = `${icon} CC Quota: ${quotaText} · Ctx: ${stats.percentUsed}%`;
+    } else {
+      this.item.text = `$(pulse) CC Ctx: ${stats.percentUsed}% ${used}/${limit}`;
+    }
     const eta = Number.isFinite(stats.messagesUntilCritical)
       ? `~${stats.messagesUntilCritical} messages until critical`
       : "not growing yet";
@@ -32,7 +40,8 @@ export class StatusBar {
       `source: ${stats.tokenSource}\n` +
       `click to open Context Control tools`;
 
-    switch (stats.level) {
+    const level = this.maxLevel(stats.level, quotaLevel);
+    switch (level) {
       case "critical":
         this.item.backgroundColor = new vscode.ThemeColor("statusBarItem.errorBackground");
         break;
@@ -42,6 +51,34 @@ export class StatusBar {
       default:
         this.item.backgroundColor = undefined;
     }
+  }
+
+  private maxQuotaPercent(stats: ContextStats): number | undefined {
+    const values = [stats.rateLimits?.primary?.usedPercent, stats.rateLimits?.secondary?.usedPercent]
+      .filter((value): value is number => typeof value === "number");
+    return values.length > 0 ? Math.max(...values) : undefined;
+  }
+
+  private quotaLevel(percent: number | undefined): "ok" | "warning" | "critical" {
+    if (percent === undefined) {
+      return "ok";
+    }
+    const cfg = vscode.workspace.getConfiguration("contextControl");
+    if (percent >= cfg.get<number>("quotaCriticalThreshold", 95)) {
+      return "critical";
+    }
+    if (percent >= cfg.get<number>("quotaWarningThreshold", 80)) {
+      return "warning";
+    }
+    return "ok";
+  }
+
+  private maxLevel(
+    context: "ok" | "warning" | "critical",
+    quota: "ok" | "warning" | "critical"
+  ): "ok" | "warning" | "critical" {
+    const rank = { ok: 0, warning: 1, critical: 2 } as const;
+    return rank[quota] > rank[context] ? quota : context;
   }
 
   /** 17234 -> "17.2k". */

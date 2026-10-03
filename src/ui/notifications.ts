@@ -38,7 +38,14 @@ export class Notifications {
 
   /** Alert on provider session quota (Codex rate limits). */
   private async reactQuota(stats: ContextStats, source?: Source): Promise<boolean> {
-    const q = stats.rateLimits?.primary ?? stats.rateLimits?.secondary;
+    const windows = [stats.rateLimits?.primary, stats.rateLimits?.secondary].filter(
+      (window): window is NonNullable<typeof window> => window !== undefined
+    );
+    const q = windows.reduce(
+      (highest, window) =>
+        !highest || window.usedPercent > highest.usedPercent ? window : highest,
+      undefined as (typeof windows)[number] | undefined
+    );
     if (!q) {
       return false;
     }
@@ -92,14 +99,6 @@ export class Notifications {
         `Context Control: context usage at ${stats.percentUsed}%.`
       );
     }
-  }
-
-  private thresholds(): { warning: number; critical: number } {
-    const cfg = vscode.workspace.getConfiguration("contextControl");
-    return {
-      warning: cfg.get<number>("warningThreshold", 75),
-      critical: cfg.get<number>("criticalThreshold", 90),
-    };
   }
 
   private quotaThresholds(): QuotaThresholds {

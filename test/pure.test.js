@@ -15,6 +15,33 @@ const { HandoffGenerator } = require("../out/handoff/ruleBased");
 const { createQuotaAlertState, nextQuotaAlert } = require("../out/core/quotaAlert");
 const { JsonlTailReader } = require("../out/core/jsonlTail");
 const { ClaudeCodeAdapter } = require("../out/adapters/claudeCode");
+const { FileStatCache } = require("../out/core/fileStatCache");
+
+test("FileStatCache: hits only when mtime and size are unchanged", () => {
+  const cache = new FileStatCache();
+  const first = { mtimeMs: 10, size: 100 };
+  cache.set("session", first, { messages: 42 });
+
+  assert.deepEqual(cache.get("session", first), {
+    hit: true,
+    value: { messages: 42 },
+  });
+  assert.deepEqual(cache.get("session", { mtimeMs: 11, size: 100 }), { hit: false });
+  assert.deepEqual(cache.get("session", { mtimeMs: 10, size: 101 }), { hit: false });
+});
+
+test("FileStatCache: caches undefined and prunes sessions outside the scan", () => {
+  const cache = new FileStatCache();
+  const fingerprint = { mtimeMs: 10, size: 0 };
+  cache.set("empty", fingerprint, undefined);
+  cache.set("old", fingerprint, "old");
+
+  assert.deepEqual(cache.get("empty", fingerprint), { hit: true, value: undefined });
+  cache.prune(new Set(["empty"]));
+  assert.deepEqual(cache.get("old", fingerprint), { hit: false });
+  cache.clear();
+  assert.deepEqual(cache.get("empty", fingerprint), { hit: false });
+});
 
 test("inferModelLimit: Opus/Sonnet 4.5+ are 1M", () => {
   assert.equal(inferModelLimit("claude-opus-4-8"), 1_000_000);
@@ -101,6 +128,25 @@ test("CodexAdapter sessionCwd: finds cwd in early metadata, not only line 1", as
   }
 });
 
+test("CodexAdapter: preserves model switches on their conversation turns", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cc-codex-models-"));
+  const file = path.join(dir, "rollout.jsonl");
+  const lines = [
+    { timestamp: "2026-01-01T00:00:00Z", type: "turn_context", payload: { model: "model-a" } },
+    { timestamp: "2026-01-01T00:00:01Z", type: "response_item", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: "first" }] } },
+    { timestamp: "2026-01-01T00:00:02Z", type: "turn_context", payload: { model: "model-b" } },
+    { timestamp: "2026-01-01T00:00:03Z", type: "response_item", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: "second" }] } },
+  ];
+  fs.writeFileSync(file, lines.map(JSON.stringify).join("\n") + "\n");
+  try {
+    const messages = await new CodexAdapter().parse(file);
+    assert.deepEqual(messages.map((m) => m.metadata?.model), ["model-a", "model-b"]);
+    assert.equal(modelLimitFromMessages(messages), DEFAULT_MODEL_LIMIT);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("HandoffGenerator: extracts Windows backslash file references", () => {
   const generator = new HandoffGenerator();
   const markdown = generator.generate(
@@ -182,11 +228,98 @@ test("HandoffGenerator: ignores environment and system prompt noise", () => {
     "codex"
   );
 
-  assert.match(markdown, /## Goal\nPlease improve the dashboard/);
+  assert.match(markdown, /## Primary and Latest Request\nPlease improve the dashboard/);
   assert.match(markdown, /src\\ui\\dashboard\.ts/);
   assert.doesNotMatch(markdown, /environment_context/);
   assert.doesNotMatch(markdown, /D:\\private\\secret\.ts/);
   assert.doesNotMatch(markdown, /package\.json/);
+});
+
+test("HandoffGenerator: removes Codex page noise and carries every narrative turn", () => {
+  const generator = new HandoffGenerator();
+  const messages = [
+    {
+      id: "page",
+      role: "user",
+      content: '<external_codex_apps_open_page>{"page_id":null}</external_codex_apps_open_page>',
+      timestamp: 0,
+      source: "codex",
+    },
+    {
+      id: "u1",
+      role: "user",
+      content: "Build an incremental session reader.",
+      timestamp: 1,
+      source: "codex",
+    },
+    {
+      id: "a1",
+      role: "assistant",
+      content: "Implemented the reader and added rotation tests.",
+      timestamp: 2,
+      source: "codex",
+    },
+    {
+      id: "u2",
+      role: "user",
+      content: "Now fix the handoff so another AI can continue.",
+      timestamp: 3,
+      source: "codex",
+    },
+  ];
+  const markdown = generator.generate(
+    messages,
+    {
+      totalTokens: 1000,
+      modelLimit: 200000,
+      percentUsed: 0.5,
+      messagesCount: 4,
+      estimatedRemaining: 199000,
+      level: "ok",
+      tokenSource: "usage",
+      estimatedCostUsd: 0,
+      tokensPerMessage: 250,
+      messagesUntilCritical: 716,
+    },
+    "codex"
+  );
+
+  assert.doesNotMatch(markdown, /external_codex_apps_open_page|page_id/);
+  assert.match(markdown, /\*\*Initial request:\*\* Build an incremental session reader/);
+  assert.match(markdown, /\*\*Latest request:\*\* Now fix the handoff/);
+  assert.match(markdown, /### 1\. User\nBuild an incremental session reader/);
+  assert.match(markdown, /### 2\. Assistant\nImplemented the reader/);
+  assert.match(markdown, /### 3\. User\nNow fix the handoff/);
+  assert.match(markdown, /The user's latest request was:[\s\S]*Now fix the handoff/);
+});
+
+test("HandoffGenerator: records model switches and marks the latest model active", () => {
+  const generator = new HandoffGenerator();
+  const messages = [
+    {
+      id: "1", role: "user", content: "Start", timestamp: 1, source: "claude-code",
+    },
+    {
+      id: "2", role: "assistant", content: "First pass", timestamp: 2, source: "claude-code",
+      metadata: { model: "claude-sonnet-4-6" },
+    },
+    {
+      id: "3", role: "assistant", content: "Second pass", timestamp: 3, source: "claude-code",
+      metadata: { model: "claude-opus-4-8" },
+    },
+  ];
+  const markdown = generator.generate(
+    messages,
+    {
+      totalTokens: 1000, modelLimit: 1000000, percentUsed: 0.1, messagesCount: 3,
+      estimatedRemaining: 999000, level: "ok", tokenSource: "usage",
+      estimatedCostUsd: 0, tokensPerMessage: 333, messagesUntilCritical: 2699,
+    },
+    "claude-code"
+  );
+
+  assert.match(markdown, /claude-sonnet-4-6/);
+  assert.match(markdown, /claude-opus-4-8 \(active at handoff\)/);
 });
 
 test("quotaAlert: warning latches until usage drops below warning", () => {
@@ -349,6 +482,83 @@ test("Notifications: quota critical suppresses duplicate context critical handof
   assert.equal(calls.filter((c) => c.type === "command").length, 1);
   assert.match(calls[0].message, /Codex session quota at 96%/);
   assert.equal(calls[1].command, "contextControl.handoff");
+});
+
+test("Notifications: alerts for the fullest quota window, including weekly", async () => {
+  const calls = [];
+  const mockVscode = {
+    workspace: { getConfiguration: () => ({ get: (key, fallback) => ({ quotaWarningThreshold: 80, quotaCriticalThreshold: 95 }[key] ?? fallback) }) },
+    window: {
+      showErrorMessage(message) { calls.push(message); return Promise.resolve(undefined); },
+      showWarningMessage() { return Promise.resolve(undefined); },
+    },
+    commands: { executeCommand() { return Promise.resolve(undefined); } },
+  };
+  const originalLoad = Module._load;
+  const modulePath = require.resolve("../out/ui/notifications");
+  delete require.cache[modulePath];
+  Module._load = function load(request, parent, isMain) {
+    return request === "vscode" ? mockVscode : originalLoad.call(this, request, parent, isMain);
+  };
+  try {
+    const { Notifications } = require(modulePath);
+    await new Notifications().react({
+      totalTokens: 100, modelLimit: 1000, percentUsed: 10, messagesCount: 1,
+      estimatedRemaining: 900, level: "ok", tokenSource: "usage", estimatedCostUsd: 0,
+      tokensPerMessage: 100, messagesUntilCritical: 8,
+      rateLimits: {
+        primary: { usedPercent: 40, windowMinutes: 300 },
+        secondary: { usedPercent: 100, windowMinutes: 10080 },
+      },
+    }, "weekly", "claude-code");
+  } finally {
+    Module._load = originalLoad;
+    delete require.cache[modulePath];
+  }
+  assert.equal(calls.length, 1);
+  assert.match(calls[0], /Claude Code session quota at 100%/);
+});
+
+test("StatusBar: labels context separately and gives a quota lockout priority", () => {
+  let item;
+  const mockVscode = {
+    workspace: {
+      getConfiguration() {
+        return { get: (key, fallback) => ({ quotaWarningThreshold: 80, quotaCriticalThreshold: 95 }[key] ?? fallback) };
+      },
+    },
+    window: {
+      createStatusBarItem() {
+        item = { text: "", tooltip: "", backgroundColor: undefined, show() {}, dispose() {} };
+        return item;
+      },
+    },
+    StatusBarAlignment: { Right: 2 },
+    ThemeColor: class ThemeColor { constructor(id) { this.id = id; } },
+  };
+  const originalLoad = Module._load;
+  const modulePath = require.resolve("../out/ui/statusBar");
+  delete require.cache[modulePath];
+  Module._load = function load(request, parent, isMain) {
+    return request === "vscode" ? mockVscode : originalLoad.call(this, request, parent, isMain);
+  };
+  try {
+    const { StatusBar } = require(modulePath);
+    const bar = new StatusBar();
+    bar.update({
+      totalTokens: 761200, modelLimit: 1000000, percentUsed: 76.1, messagesCount: 45,
+      estimatedRemaining: 238800, level: "warning", tokenSource: "usage",
+      estimatedCostUsd: 0, tokensPerMessage: 16916, messagesUntilCritical: 8,
+      rateLimits: { secondary: { usedPercent: 100, windowMinutes: 10080 } },
+    });
+  } finally {
+    Module._load = originalLoad;
+    delete require.cache[modulePath];
+  }
+
+  assert.match(item.text, /Quota: LIMIT/);
+  assert.match(item.text, /Ctx: 76\.1%/);
+  assert.equal(item.backgroundColor.id, "statusBarItem.errorBackground");
 });
 
 
@@ -534,4 +744,56 @@ test("ClaudeCodeAdapter: malformed lines are skipped, not fatal", async () => {
   fs.writeFileSync(f, claudeLine(0, 100) + "\n{not json\n" + claudeLine(1, 200) + "\n");
   const msgs = await new ClaudeCodeAdapter().parse(f);
   assert.equal(msgs.length, 2);
+});
+
+test("ClaudeCodeAdapter: exposes a rejected weekly limit as provider quota", async () => {
+  const f = tmpFile("weekly-limit.jsonl");
+  const reset = Math.floor(Date.now() / 1000) + 3600;
+  const limit = JSON.stringify({
+    type: "assistant",
+    uuid: "limit",
+    timestamp: new Date().toISOString(),
+    error: "rate_limit",
+    apiErrorStatus: 429,
+    quotaLimits: { status: "rejected", rateLimitType: "seven_day", resetsAt: reset },
+    message: {
+      role: "assistant",
+      model: "<synthetic>",
+      content: [{ type: "text", text: "You've hit your weekly limit" }],
+      usage: { input_tokens: 0, output_tokens: 0 },
+    },
+  });
+  fs.writeFileSync(f, claudeLine(0, 100) + "\n" + limit + "\n");
+
+  const msgs = await new ClaudeCodeAdapter().parse(f);
+  assert.deepEqual(msgs[msgs.length - 1].metadata.rateLimits.secondary, {
+    usedPercent: 100,
+    windowMinutes: 10080,
+    resetsAt: reset,
+  });
+  assert.equal(msgs[msgs.length - 1].metadata.model, undefined);
+});
+
+test("ClaudeCodeAdapter: clears a limit after the next successful response", async () => {
+  const f = tmpFile("limit-clears.jsonl");
+  const limit = JSON.stringify({
+    type: "assistant",
+    uuid: "limit",
+    timestamp: new Date().toISOString(),
+    error: "rate_limit",
+    apiErrorStatus: 429,
+    message: {
+      role: "assistant",
+      model: "<synthetic>",
+      content: [{ type: "text", text: "You've hit your session limit" }],
+    },
+  });
+  fs.writeFileSync(f, claudeLine(0, 100) + "\n" + limit + "\n");
+  const adapter = new ClaudeCodeAdapter();
+  let msgs = await adapter.parse(f);
+  assert.equal(msgs[msgs.length - 1].metadata.rateLimits.primary.usedPercent, 100);
+
+  fs.appendFileSync(f, claudeLine(1, 200) + "\n");
+  msgs = await adapter.parse(f);
+  assert.equal(msgs[msgs.length - 1].metadata?.rateLimits, undefined);
 });

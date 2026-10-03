@@ -14,6 +14,7 @@ import { Cockpit } from "./ui/cockpit";
 import { HandoffGenerator } from "./handoff/ruleBased";
 import { MarkdownExporter } from "./exporters/markdown";
 import { modelLimitFromMessages } from "./core/modelLimits";
+import { FileStatCache, type FileFingerprint } from "./core/fileStatCache";
 import { initLog, log, logError, showLog, disposeLog } from "./core/log";
 import type { ContextStats, NormalizedMessage, RateLimitWindow, Source } from "./core/types";
 
@@ -26,7 +27,7 @@ const REBUILD_KEYS = ["contextControl.adapters"];
 interface SessionCandidate {
   adapter: BaseAdapter;
   file: string;
-  mtime: number;
+  fingerprint: FileFingerprint;
 }
 
 type ContextControlMenuCommand =
@@ -46,6 +47,15 @@ async function fileMtime(file: string): Promise<number> {
     return (await fs.promises.stat(file)).mtimeMs;
   } catch {
     return 0;
+  }
+}
+
+async function fileFingerprint(file: string): Promise<FileFingerprint | undefined> {
+  try {
+    const stat = await fs.promises.stat(file);
+    return { mtimeMs: stat.mtimeMs, size: stat.size };
+  } catch {
+    return undefined;
   }
 }
 
@@ -117,13 +127,25 @@ function titleCase(value: string): string {
   return value.length > 0 ? value[0].toUpperCase() + value.slice(1).toLowerCase() : value;
 }
 
+function modelsFromMessages(messages: NormalizedMessage[]): string[] {
+  const models: string[] = [];
+  for (const message of messages) {
+    const model = message.metadata?.model;
+    if (model && model !== "<synthetic>" && models[models.length - 1] !== model) {
+      models.push(model);
+    }
+  }
+  return models;
+}
+
 export function activate(context: vscode.ExtensionContext): void {
   initLog();
   log("activating Context Control");
 
   // 1. init adapters (respecting the user's enabled list). Rebuilt in place
   // when the setting changes, so no window reload is needed.
-  const DEFAULT_ADAPTERS = ["claude-code", "cline", "codex"];
+  // Cline remains opt-in until its storage schema is verified against real data.
+  const DEFAULT_ADAPTERS = ["claude-code", "codex"];
   function buildAdapters(): BaseAdapter[] {
     const enabled = vscode.workspace
       .getConfiguration("contextControl")
@@ -136,6 +158,7 @@ export function activate(context: vscode.ExtensionContext): void {
   const analyzer = new Analyzer();
   const generator = new HandoffGenerator();
   const exporter = new MarkdownExporter();
+  const summaryCache = new FileStatCache<SessionSummary | undefined>();
 
   // 2. init status bar + notifications + cockpit
   const statusBar = new StatusBar();
@@ -237,10 +260,11 @@ export function activate(context: vscode.ExtensionContext): void {
     const modelLimit = modelLimitFromMessages(best.messages);
     const stats = analyzer.analyze(best.messages, modelLimit);
     latest = { messages: best.messages, stats, source: best.adapter.name };
+    const models = modelsFromMessages(best.messages);
     statusBar.update(stats);
     cockpit.update({
       source: best.adapter.name,
-      model: best.messages[best.messages.length - 1]?.metadata?.model,
+      model: models[models.length - 1],
       percentUsed: stats.percentUsed,
       totalTokens: stats.totalTokens,
       modelLimit: stats.modelLimit,
@@ -266,13 +290,28 @@ export function activate(context: vscode.ExtensionContext): void {
   }
 
   /** Analyze one session file into a dashboard summary. */
-  async function summarize(adapter: BaseAdapter, file: string): Promise<SessionSummary | undefined> {
+  function summaryCacheKey(adapter: BaseAdapter, file: string): string {
+    return `${adapter.name}\0${file}`;
+  }
+
+  async function summarize(
+    adapter: BaseAdapter,
+    file: string,
+    fingerprint: FileFingerprint
+  ): Promise<SessionSummary | undefined> {
+    const key = summaryCacheKey(adapter, file);
+    const cached = summaryCache.get(key, fingerprint);
+    if (cached.hit) {
+      return cached.value;
+    }
     const messages = await adapter.parse(file);
     if (messages.length === 0) {
+      summaryCache.set(key, fingerprint, undefined);
       return undefined;
     }
     const stats = analyzer.analyze(messages, modelLimitFromMessages(messages));
-    return {
+    const models = modelsFromMessages(messages);
+    const summary: SessionSummary = {
       source: adapter.name,
       project: path.basename(path.dirname(file)),
       file,
@@ -283,9 +322,13 @@ export function activate(context: vscode.ExtensionContext): void {
       level: stats.level,
       estimatedCostUsd: stats.estimatedCostUsd,
       tokenSource: stats.tokenSource,
+      model: models[models.length - 1],
+      models,
       rateLimits: stats.rateLimits,
-      updatedAt: await fileMtime(file),
+      updatedAt: fingerprint.mtimeMs,
     };
+    summaryCache.set(key, fingerprint, summary);
+    return summary;
   }
 
   /**
@@ -306,18 +349,25 @@ export function activate(context: vscode.ExtensionContext): void {
         logError(`${adapter.name} listSessions failed`, err);
       }
       for (const file of sessions) {
-        candidates.push({ adapter, file, mtime: await fileMtime(file) });
+        const fingerprint = await fileFingerprint(file);
+        if (fingerprint) {
+          candidates.push({ adapter, file, fingerprint });
+        }
       }
     }
 
-    candidates.sort((a, b) => b.mtime - a.mtime);
-    for (const { adapter, file } of candidates.slice(0, DASHBOARD_SESSION_LIMIT)) {
+    candidates.sort((a, b) => b.fingerprint.mtimeMs - a.fingerprint.mtimeMs);
+    const selected = candidates.slice(0, DASHBOARD_SESSION_LIMIT);
+    summaryCache.prune(
+      new Set(selected.map(({ adapter, file }) => summaryCacheKey(adapter, file)))
+    );
+    for (const { adapter, file, fingerprint } of selected) {
       if (token?.isCancellationRequested) {
         log(`dashboard: scan cancelled after ${out.length} session(s)`);
         break;
       }
       try {
-        const summary = await summarize(adapter, file);
+        const summary = await summarize(adapter, file, fingerprint);
         if (summary) {
           out.push(summary);
         }
@@ -386,6 +436,7 @@ export function activate(context: vscode.ExtensionContext): void {
     await watcher.dispose();
     adapters = buildAdapters();
     latest = undefined;
+    summaryCache.clear();
     watcher = new FileWatcher(
       adapters.map((a) => a.getStoragePath()),
       () => void scan(true)
@@ -529,6 +580,7 @@ export function activate(context: vscode.ExtensionContext): void {
         void rebuild();
       } else if (e.affectsConfiguration("contextControl")) {
         // Thresholds only affect how existing numbers are classified.
+        summaryCache.clear();
         void scan(true);
       }
     }),
