@@ -2,6 +2,34 @@
 
 All notable changes to **T&N Context Control** are listed here.
 
+## [0.2.4] — 2026-10-04
+
+### Fixed
+
+- **Context and provider quota are now unambiguous.** The status bar labels
+  context as `Ctx`; a detected lockout takes priority as `Quota: LIMIT`.
+- **Claude Code five-hour and weekly lockouts are detected** from its local
+  JSONL rejection records and cleared after reset or a successful response.
+- **Handoffs now preserve the actual conversation.** Harness/XML noise is
+  removed, every meaningful user/assistant turn appears in a compact timeline,
+  and the latest user request—not the last assistant reply—drives continuation.
+- **Model switching is preserved per turn.** Handoffs and the dashboard show
+  the active model and ordered model history while context follows the latest
+  provider-reported state and cost remains calculated per message/model.
+
+### Performance
+
+- **Dashboard summaries are cached by path, mtime, and size.** On the 205MB
+  real-session smoke set, an unchanged warm scan now measures **16–28 ms**
+  instead of **6.6 s**.
+
+### Changed
+
+- Cline is now opt-in until its documented schema can be verified against a
+  real installation.
+- Repository and issue links now point to the public GitHub project.
+- Removed an unused notification method and a stray 935KB source-tree image.
+
 ## [0.2.3] — 2026-09-08
 
 Stability and performance release. Sessions grow to tens of megabytes, and
@@ -32,10 +60,6 @@ every write.
 - **The dashboard yields between sessions and can be cancelled.** Scanning up
   to 50 sessions no longer freezes the UI, and its progress notification's
   Cancel button now actually stops the scan.
-- **Dashboard summaries are cached by path, mtime, and size.** An unchanged
-  warm dashboard now performs file stats instead of re-parsing sessions whose
-  message caches were evicted. On the 205MB real-session smoke set, warm scans
-  measured **16–28 ms** instead of **6.6 s**.
 
 ### Fixed — reliability
 
@@ -49,15 +73,6 @@ every write.
   chokidar could surface as an unhandled error in the extension host.
 - **Handoffs generated from the dashboard report their failures** instead of
   rejecting silently out of the webview message handler.
-- **Handoffs now carry the actual conversation.** Harness/XML noise is removed,
-  every meaningful user/assistant turn is represented in a compact timeline,
-  the latest user request drives the continuation prompt, and model switches
-  are recorded. This replaces the misleading first-message/latest-assistant
-  heuristic.
-- **Claude Code limit rejections are detected.** Five-hour and weekly lockouts
-  recorded in Claude's local JSONL now surface as provider quota. The status
-  bar labels context (`Ctx`) and quota separately and shows `Quota: LIMIT`
-  instead of making a 76% context reading look like account quota.
 
 ### Added
 
@@ -83,9 +98,6 @@ every write.
 - **Icon downscaled** from 1254×1254 to 256×256 (935KB → 45KB).
 - Together these take the packaged extension from **11.7MB to under 0.5MB**.
 - `qna` set to `marketplace`, so the listing has a working place to report bugs.
-- Marketplace repository and issue links now point to the public GitHub project.
-- Cline is no longer enabled by default because no real installation was
-  available to verify its documented storage schema; it remains opt-in.
 
 ## [0.2.2]
 
