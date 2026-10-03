@@ -9,10 +9,10 @@
   "homepage": "https://tn-control.vercel.app/",
   "repository": {
     "type": "git",
-    "url": "https://tn-control.vercel.app/"
+    "url": "https://github.com/TouchMeCode/T-N-Context-Control.git"
   },
   "bugs": {
-    "url": "https://tn-control.vercel.app/"
+    "url": "https://github.com/TouchMeCode/T-N-Context-Control/issues"
   },
   "qna": "marketplace",
   "engines": {
