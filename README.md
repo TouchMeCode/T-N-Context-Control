@@ -9,6 +9,10 @@ markdown you can paste into another AI session.
 
 Everything runs **100% locally**. No conversation ever leaves your machine.
 
+Future provider/editor work—including Gemini, Cursor-native conversations,
+Antigravity, and other AI coding tools—is tracked in the
+[product roadmap](https://github.com/TouchMeCode/T-N-Context-Control/blob/main/ROADMAP.md).
+
 ## What it does
 
 - Reads conversation history from local storage (no API keys, no network).
