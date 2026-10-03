@@ -2,7 +2,7 @@
   "name": "tn-context-control",
   "displayName": "T&N Context Control",
   "description": "Monitor AI coding context usage (Claude Code, Codex, Cline) and generate portable handoffs — by T&N Control",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "publisher": "tn-control",
   "license": "SEE LICENSE IN LICENSE",
   "icon": "icon.png",
