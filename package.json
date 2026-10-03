@@ -1,0 +1,137 @@
+{
+  "name": "tn-context-control",
+  "displayName": "T&N Context Control",
+  "description": "Monitor AI coding context usage (Claude Code, Codex, Cline) and generate portable handoffs — by T&N Control",
+  "version": "0.2.3",
+  "publisher": "tn-control",
+  "license": "SEE LICENSE IN LICENSE",
+  "icon": "icon.png",
+  "homepage": "https://tn-control.vercel.app/",
+  "repository": {
+    "type": "git",
+    "url": "https://tn-control.vercel.app/"
+  },
+  "bugs": {
+    "url": "https://tn-control.vercel.app/"
+  },
+  "qna": "marketplace",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./dist/extension.js",
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "bundle": "node esbuild.js",
+    "test": "npm run compile && node --test test/pure.test.js",
+    "vscode:prepublish": "npm run bundle"
+  },
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "contextControlCockpit",
+          "title": "Context Control",
+          "icon": "media/cockpit.svg"
+        }
+      ]
+    },
+    "views": {
+      "contextControlCockpit": [
+        {
+          "type": "webview",
+          "id": "contextControl.cockpit",
+          "name": "Cockpit"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "contextControl.menu",
+        "title": "Context Control: Open Menu"
+      },
+      {
+        "command": "contextControl.cockpit",
+        "title": "Context Control: Open Cockpit"
+      },
+      {
+        "command": "contextControl.scan",
+        "title": "Context Control: Scan Conversations"
+      },
+      {
+        "command": "contextControl.status",
+        "title": "Context Control: Show Context Status"
+      },
+      {
+        "command": "contextControl.handoff",
+        "title": "Context Control: Generate Handoff"
+      },
+      {
+        "command": "contextControl.export",
+        "title": "Context Control: Export Handoff to .md"
+      },
+      {
+        "command": "contextControl.dashboard",
+        "title": "Context Control: Open Dashboard"
+      },
+      {
+        "command": "contextControl.showLogs",
+        "title": "Context Control: Show Logs"
+      }
+    ],
+    "configuration": {
+      "title": "Context Control",
+      "properties": {
+        "contextControl.warningThreshold": {
+          "type": "number",
+          "default": 75,
+          "description": "% context usage to trigger warning"
+        },
+        "contextControl.criticalThreshold": {
+          "type": "number",
+          "default": 90,
+          "description": "% context usage to trigger critical alert"
+        },
+        "contextControl.quotaWarningThreshold": {
+          "type": "number",
+          "default": 80,
+          "description": "% provider session quota usage to trigger warning"
+        },
+        "contextControl.quotaCriticalThreshold": {
+          "type": "number",
+          "default": 95,
+          "description": "% provider session quota usage to trigger critical alert"
+        },
+        "contextControl.outputDir": {
+          "type": "string",
+          "default": ".ai-memory",
+          "description": "Folder to save handoff files (relative to workspace)"
+        },
+        "contextControl.adapters": {
+          "type": "array",
+          "default": [
+            "claude-code",
+            "cline",
+            "codex"
+          ],
+          "description": "Adapters to enable"
+        }
+      }
+    }
+  },
+  "devDependencies": {
+    "@types/node": "^18.19.0",
+    "@types/vscode": "^1.85.0",
+    "esbuild": "^0.20.2",
+    "typescript": "^5.4.0"
+  },
+  "dependencies": {
+    "chokidar": "^3.6.0"
+  }
+}

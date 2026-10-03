@@ -1,0 +1,16 @@
+.vscode/**
+.vscode-test/**
+src/**
+out/**
+test/**
+docs/**
+**/*.ts
+**/*.map
+.gitignore
+tsconfig.json
+esbuild.js
+generate-icon.js
+.ai-memory/**
+*.vsix
+*.log
+icon-source-*.png
