@@ -130,8 +130,9 @@ Press **F5** to launch an Extension Development Host.
 ## Reporting a problem
 
 Run **Context Control: Show Logs** and include the output — it records adapter
-failures, scan timings, and watcher errors. Bugs can be filed on the extension's
-Marketplace Q&A tab.
+failures, scan timings, and watcher errors. Bugs can be filed through
+[GitHub Issues](https://github.com/TouchMeCode/T-N-Context-Control/issues) or the
+extension's Marketplace Q&A tab.
 
 ## Privacy
 

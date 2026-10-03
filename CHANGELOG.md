@@ -83,6 +83,7 @@ every write.
 - **Icon downscaled** from 1254×1254 to 256×256 (935KB → 45KB).
 - Together these take the packaged extension from **11.7MB to under 0.5MB**.
 - `qna` set to `marketplace`, so the listing has a working place to report bugs.
+- Marketplace repository and issue links now point to the public GitHub project.
 - Cline is no longer enabled by default because no real installation was
   available to verify its documented storage schema; it remains opt-in.
 
