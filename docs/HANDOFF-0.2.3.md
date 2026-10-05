@@ -2,7 +2,7 @@
 
 **For:** the next agent picking this up (Codex).
 **From:** Claude, session of 2026-10-01.
-**Repo:** `D:\Toolst-n\contextbridge-vscode` — VS Code extension `tn-control.tn-context-control`.
+**Repo:** `<repo>/contextbridge-vscode` — VS Code extension `tn-control.tn-context-control`.
 
 ---
 
@@ -10,7 +10,7 @@
 
 Version bumped to **0.2.3** in `package.json`.
 
-**There is no version control on this project.** `D:\Toolst-n\.git` exists but is an
+**There was no version control on this project at handoff time.** `<workspace>/.git` existed but was an
 empty directory — git does not recognise it as a repository (`fatal: not a git
 repository`), and nothing has ever been committed. So there is no diff to review, no
 way to revert, and the 0.2.2 baseline exists only inside
@@ -20,7 +20,7 @@ changes — see §4.0.
 Everything below is verified green as of this handoff:
 
 ```bash
-cd D:\Toolst-n\contextbridge-vscode
+cd <repo>/contextbridge-vscode
 npx tsc -p ./ --noEmit          # clean
 npm test                        # 27/27 pass  (compiles to out/ first)
 npm run bundle                  # dist/extension.js, 144 KB
@@ -215,7 +215,7 @@ Design decisions worth preserving:
 `.git` is an empty directory, so nothing here is recoverable and none of the work
 below is reviewable as a diff. Before touching code:
 
-1. `git init` in `D:\Toolst-n` (or in `contextbridge-vscode`, if the extension should
+1. `git init` in `<workspace>` (or in `contextbridge-vscode`, if the extension should
    be its own repo — **ask the owner which**).
 2. Add a `.gitignore` covering `node_modules/`, `dist/`, `out/`, `*.vsix`,
    `.ai-memory/`, `docs/research/`.
@@ -288,12 +288,12 @@ link. `qna: "marketplace"` is a stopgap. Needs a real git URL (or the fields rem
 ## 6. Test harnesses
 
 All in the session scratchpad
-`C:\Users\user\AppData\Local\Temp\claude\d--Toolst-n\f60d3c99-3480-46f8-b0da-2987a5a1750d\scratchpad\`.
+`<temporary-session-scratchpad>/`.
 They are throwaway but re-usable — copy anything worth keeping into `test/`.
 
 | File | What it does |
 |---|---|
-| `smoke.js` | Loads the **production bundle** with a stub `vscode` module, calls `activate()` against the machine's real session files, and reports activation time, status-bar text, dashboard scan times and the output-channel log. Run: `node <scratchpad>/smoke.js "D:\NBCSERV"`. This is the highest-value check — it catches activation crashes and missing externals. |
+| `smoke.js` | Loads the **production bundle** with a stub `vscode` module, calls `activate()` against local session files, and reports activation time, status-bar text, dashboard scan times and the output-channel log. Run: `node <scratchpad>/smoke.js "D:\Projects\sample-app"`. This is the highest-value check — it catches activation crashes and missing externals. |
 | `make_preview.py` | Extracts the dashboard HTML out of `dashboard.ts`, injects sample session data and VS Code theme variables, and writes `preview/dashboard-{dark,light}.html` for rendering in a browser. |
 | `qa.mjs` / `qa2.mjs` | Playwright scripts asserting tooltip content, filter scoping across charts + table + KPIs, sorting, and the empty state. |
 | `resize_icon.js` | Pure-Node PNG decode → box-filter downscale → re-encode. Used for `icon.png`; keep it if the icon is ever regenerated. |

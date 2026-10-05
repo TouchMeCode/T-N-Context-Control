@@ -196,8 +196,8 @@ Claude Code เก็บ conversation เป็น JSONL ที่:
 บน Windows ตัวอย่าง project id จะมาจาก workspace path ที่ encode แล้ว เช่น:
 
 ```text
-D:\ThaiWay -> d--ThaiWay
-C:\Users\user\Desktop\tire -> c--Users-user-Desktop-tire
+D:\Projects\sample-app -> d--Projects-sample-app
+C:\Work\demo-api -> c--Work-demo-api
 ```
 
 ### listSessions
@@ -631,7 +631,7 @@ FIXME: ...
 
 ```text
 src\extension.ts
-D:\Toolst-n\contextbridge-vscode\src\watcher\fileWatcher.ts
+D:\Projects\context-control\src\watcher\fileWatcher.ts
 ```
 
 ### Recommended Next Prompt

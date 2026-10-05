@@ -5,6 +5,19 @@ out/
 *.log
 .vscode-test/
 
+# Secrets and machine-local configuration
+.env
+.env.*
+!.env.example
+.npmrc
+!.npmrc.example
+*.pem
+*.key
+*.p12
+*.pfx
+credentials.*
+secrets.*
+
 # Privacy: never commit local conversation research or generated handoffs
 docs/research/
 .ai-memory/

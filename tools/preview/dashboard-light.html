@@ -375,7 +375,7 @@ window.acquireVsCodeApi = function(){ return { postMessage: function(){} }; };
     if (filter === "warning" && s.level !== "warning") return false;
     if (filter === "quota" && quotaUsed(s) <= 0) return false;
     if (!query) return true;
-    return (s.project + " " + s.source + " " + s.file).toLowerCase().indexOf(query) >= 0;
+    return (s.project + " " + s.source + " " + s.file + " " + (s.models || []).join(" ")).toLowerCase().indexOf(query) >= 0;
   }
   function renderChips() {
     var defs = [
@@ -453,7 +453,9 @@ window.acquireVsCodeApi = function(){ return { postMessage: function(){} }; };
     shown.forEach(function (s) {
       var name = el("div", "rowName hoverable");
       name.appendChild(el("div", "n", s.project));
-      name.appendChild(el("div", "s", sourceName(s.source)));
+      var modelLine = sourceName(s.source) + (s.model ? " · " + s.model : "");
+      if (s.models && s.models.length > 1) modelLine += " · " + s.models.length + " models";
+      name.appendChild(el("div", "s", modelLine));
       name.tabIndex = 0;
 
       var m = meter(s.percentUsed, s.level, [th.warning, th.critical]);
@@ -467,6 +469,7 @@ window.acquireVsCodeApi = function(){ return { postMessage: function(){} }; };
           ["Context", s.percentUsed.toFixed(1) + "% (" + levelLabel(s.level) + ")"],
           ["Tokens", fmtTok(s.totalTokens) + " / " + fmtTok(s.modelLimit)],
           ["Messages", String(s.messages)],
+          ["Models", s.models && s.models.length ? s.models.join(" → ") : "not reported"],
           ["Est. cost", fmtMoney(s.estimatedCostUsd)],
           ["Token source", s.tokenSource === "usage" ? "real usage" : "estimated"],
           ["Updated", fmtDate(s.updatedAt)]
@@ -637,6 +640,11 @@ window.acquireVsCodeApi = function(){ return { postMessage: function(){} }; };
       b2.style.marginLeft = "5px";
       badges.appendChild(b1);
       badges.appendChild(b2);
+      if (s.model) {
+        var b3 = el("span", "badge ghost", s.model + (s.models.length > 1 ? " · " + s.models.length + " models" : ""));
+        b3.style.marginLeft = "5px";
+        badges.appendChild(b3);
+      }
       td1.appendChild(badges);
       tr.appendChild(td1);
 
@@ -744,7 +752,7 @@ window.acquireVsCodeApi = function(){ return { postMessage: function(){} }; };
 <script>
 (function(){
   var now = Date.now();
-  var p = {"type": "data", "sessions": [{"source": "claude-code", "project": "thai-koreaTH", "file": "C:/Users/user/.claude/projects/d--thai-koreaTH/6a24ce71-9ed6-44aa-9590-051f32518e4f.jsonl", "messages": 3427, "totalTokens": 186420, "modelLimit": 200000, "percentUsed": 93.2, "level": "critical", "estimatedCostUsd": 14.82, "tokenSource": "usage", "updatedAt": null}, {"source": "codex", "project": "system-car", "file": "C:/Users/user/.codex/sessions/2026/09/08/rollout-2026-09-08T09-12-04-8f2c.jsonl", "messages": 1324, "totalTokens": 241900, "modelLimit": 272000, "percentUsed": 88.9, "level": "warning", "estimatedCostUsd": 0, "tokenSource": "usage", "updatedAt": null, "rateLimits": {"primary": {"usedPercent": 81.4, "windowMinutes": 300, "resetsAt": null}, "secondary": {"usedPercent": 42.7, "windowMinutes": 10080, "resetsAt": null}, "planType": "pro"}}, {"source": "claude-code", "project": "NBCSERV", "file": "C:/Users/user/.claude/projects/d--NBCSERV/f7f6cfdb-fcd6-4649-af15-5a899ea0ff1d.jsonl", "messages": 7660, "totalTokens": 709445, "modelLimit": 1000000, "percentUsed": 70.9, "level": "ok", "estimatedCostUsd": 38.4, "tokenSource": "usage", "updatedAt": null}, {"source": "claude-code", "project": "phoenix", "file": "C:/Users/user/.claude/projects/d--phoenix/249765f9-fd28-4f97-a595-53508bb9c8f2.jsonl", "messages": 1762, "totalTokens": 152300, "modelLimit": 200000, "percentUsed": 76.2, "level": "warning", "estimatedCostUsd": 9.15, "tokenSource": "usage", "updatedAt": null}, {"source": "claude-code", "project": "sport-store", "file": "C:/Users/user/.claude/projects/c--Users-user-Downloads-sport-store/b492d001.jsonl", "messages": 1385, "totalTokens": 96700, "modelLimit": 200000, "percentUsed": 48.4, "level": "ok", "estimatedCostUsd": 5.02, "tokenSource": "usage", "updatedAt": null}, {"source": "cline", "project": "my-web2", "file": "C:/Users/user/AppData/Roaming/Code/User/globalStorage/saoudrizwan.claude-dev/tasks/1718/api_conversation_history.json", "messages": 412, "totalTokens": 61200, "modelLimit": 200000, "percentUsed": 30.6, "level": "ok", "estimatedCostUsd": 1.87, "tokenSource": "estimate", "updatedAt": null}, {"source": "claude-code", "project": "Toolst-n", "file": "C:/Users/user/.claude/projects/d--Toolst-n/f60d3c99.jsonl", "messages": 178, "totalTokens": 41000, "modelLimit": 1000000, "percentUsed": 4.1, "level": "ok", "estimatedCostUsd": 0.94, "tokenSource": "usage", "updatedAt": null}, {"source": "claude-code", "project": "careyou", "file": "C:/Users/user/.claude/projects/d--careyou/aa11.jsonl", "messages": 940, "totalTokens": 118000, "modelLimit": 200000, "percentUsed": 59.0, "level": "ok", "estimatedCostUsd": 3.31, "tokenSource": "usage", "updatedAt": null}], "thresholds": {"warning": 75, "critical": 90, "quotaWarning": 80, "quotaCritical": 95}};
+  var p = {"type": "data", "sessions": [{"source": "claude-code", "project": "sample-web", "file": "C:/Demo/.claude/projects/d--sample-web/11111111-1111-4111-8111-111111111111.jsonl", "messages": 3427, "totalTokens": 186420, "modelLimit": 200000, "percentUsed": 93.2, "level": "critical", "estimatedCostUsd": 14.82, "tokenSource": "usage", "updatedAt": null}, {"source": "codex", "project": "sample-api", "file": "C:/Demo/.codex/sessions/2026/09/08/rollout-2026-09-08T09-12-04-demo.jsonl", "messages": 1324, "totalTokens": 241900, "modelLimit": 272000, "percentUsed": 88.9, "level": "warning", "estimatedCostUsd": 0, "tokenSource": "usage", "updatedAt": null, "rateLimits": {"primary": {"usedPercent": 81.4, "windowMinutes": 300, "resetsAt": null}, "secondary": {"usedPercent": 42.7, "windowMinutes": 10080, "resetsAt": null}, "planType": "pro"}}, {"source": "claude-code", "project": "demo-service", "file": "C:/Demo/.claude/projects/d--demo-service/22222222-2222-4222-8222-222222222222.jsonl", "messages": 7660, "totalTokens": 709445, "modelLimit": 1000000, "percentUsed": 70.9, "level": "ok", "estimatedCostUsd": 38.4, "tokenSource": "usage", "updatedAt": null}, {"source": "claude-code", "project": "demo-mobile", "file": "C:/Demo/.claude/projects/d--demo-mobile/33333333-3333-4333-8333-333333333333.jsonl", "messages": 1762, "totalTokens": 152300, "modelLimit": 200000, "percentUsed": 76.2, "level": "warning", "estimatedCostUsd": 9.15, "tokenSource": "usage", "updatedAt": null}, {"source": "claude-code", "project": "sample-store", "file": "C:/Demo/.claude/projects/d--sample-store/44444444.jsonl", "messages": 1385, "totalTokens": 96700, "modelLimit": 200000, "percentUsed": 48.4, "level": "ok", "estimatedCostUsd": 5.02, "tokenSource": "usage", "updatedAt": null}, {"source": "cline", "project": "demo-dashboard", "file": "C:/Demo/Code/User/globalStorage/saoudrizwan.claude-dev/tasks/1000/api_conversation_history.json", "messages": 412, "totalTokens": 61200, "modelLimit": 200000, "percentUsed": 30.6, "level": "ok", "estimatedCostUsd": 1.87, "tokenSource": "estimate", "updatedAt": null}, {"source": "claude-code", "project": "sample-tool", "file": "C:/Demo/.claude/projects/d--sample-tool/55555555.jsonl", "messages": 178, "totalTokens": 41000, "modelLimit": 1000000, "percentUsed": 4.1, "level": "ok", "estimatedCostUsd": 0.94, "tokenSource": "usage", "updatedAt": null}, {"source": "claude-code", "project": "demo-worker", "file": "C:/Demo/.claude/projects/d--demo-worker/66666666.jsonl", "messages": 940, "totalTokens": 118000, "modelLimit": 200000, "percentUsed": 59.0, "level": "ok", "estimatedCostUsd": 3.31, "tokenSource": "usage", "updatedAt": null}], "thresholds": {"warning": 75, "critical": 90, "quotaWarning": 80, "quotaCritical": 95}};
   var offs = [3*60e3, 12*60e3, 55*60e3, 2*3600e3, 5*3600e3, 26*3600e3, 40e3, 9*3600e3];
   p.sessions.forEach(function(s,i){ s.updatedAt = now - offs[i % offs.length]; });
   p.sessions.forEach(function(s){

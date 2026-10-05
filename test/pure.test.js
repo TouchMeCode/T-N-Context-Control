@@ -154,7 +154,7 @@ test("HandoffGenerator: extracts Windows backslash file references", () => {
       {
         id: "1",
         role: "user",
-        content: "Please review src\\extension.ts and D:\\Toolst-n\\contextbridge-vscode\\src\\watcher\\fileWatcher.ts",
+        content: "Please review src\\extension.ts and D:\\Projects\\context-control\\src\\watcher\\fileWatcher.ts",
         timestamp: 0,
         source: "codex",
       },
@@ -175,7 +175,7 @@ test("HandoffGenerator: extracts Windows backslash file references", () => {
   );
 
   assert.match(markdown, /src\\extension\.ts/);
-  assert.match(markdown, /D:\\Toolst-n\\contextbridge-vscode\\src\\watcher\\fileWatcher\.ts/);
+  assert.match(markdown, /D:\\Projects\\context-control\\src\\watcher\\fileWatcher\.ts/);
 });
 
 test("HandoffGenerator: ignores environment and system prompt noise", () => {
@@ -194,7 +194,7 @@ test("HandoffGenerator: ignores environment and system prompt noise", () => {
         id: "system",
         role: "system",
         content:
-          "Developer instructions mention D:\\private\\secret.ts and C:/Users/user/.codex/skills/foo/SKILL.md",
+          "Developer instructions mention D:\\example\\secret.ts and C:/Demo/.codex/skills/foo/SKILL.md",
         timestamp: 1,
         source: "codex",
       },
