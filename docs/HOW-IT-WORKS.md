@@ -196,8 +196,8 @@ Claude Code เก็บ conversation เป็น JSONL ที่:
 บน Windows ตัวอย่าง project id จะมาจาก workspace path ที่ encode แล้ว เช่น:
 
 ```text
-D:\Projects\sample-app -> d--sample-app
-C:\Demo\Desktop\tire -> c--Demo-Desktop-tire
+D:\Projects\sample-app -> d--Projects-sample-app
+C:\Work\demo-api -> c--Work-demo-api
 ```
 
 ### listSessions

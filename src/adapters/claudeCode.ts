@@ -93,8 +93,8 @@ export class ClaudeCodeAdapter extends BaseAdapter {
   /**
    * Encode a filesystem path the way Claude Code names its project folders:
    * every non-alphanumeric char becomes "-" and the drive letter is lowercased.
-   *   D:\Projects\sample-app                 -> d--sample-app
-   *   C:\Demo\Desktop\tire -> c--Demo-Desktop-tire
+   *   D:\Projects\sample-app       -> d--Projects-sample-app
+   *   C:\Work\demo-api             -> c--Work-demo-api
    */
   encodeProjectId(workspacePath: string): string {
     const encoded = workspacePath.replace(/[^A-Za-z0-9]/g, "-");
