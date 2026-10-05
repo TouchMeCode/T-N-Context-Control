@@ -2,6 +2,32 @@
 
 All notable changes to **T&N Context Control** are listed here.
 
+## [0.2.5] — 2026-10-06
+
+### Security
+
+- Updated the bundled file watcher from `chokidar` 3.6.0 to 4.0.3 and the
+  build tool from `esbuild` 0.20.2 to 0.28.2. `npm audit` now reports zero
+  known vulnerabilities.
+- Added safeguards against committing environment files, private keys,
+  credentials, local conversation research, and generated handoffs.
+- Added a security policy with a private vulnerability-reporting path.
+
+### Privacy
+
+- Replaced machine-specific paths, project names, session IDs, and preview
+  data in the public repository with clearly synthetic examples.
+- Added a privacy warning to the public bug-report form so logs and
+  screenshots are sanitized before submission.
+
+### Maintenance
+
+- Added CI coverage for Node.js 18 and 22, including compilation, unit tests,
+  production bundling, and dashboard QA.
+- Added weekly grouped Dependabot updates for production and development
+  dependencies.
+- No user-facing workflow or UI behavior changed in this patch release.
+
 ## [0.2.4] — 2026-10-04
 
 ### Fixed
