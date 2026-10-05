@@ -145,4 +145,7 @@ Context Control reads local files only and never transmits conversation content.
 
 ## License
 
-Proprietary — © 2026 T&N Control. All rights reserved. See `LICENSE`.
+Source-available proprietary — © 2026 T&N Control. The code may be viewed and
+forked through GitHub, and official releases may be used as described in
+`LICENSE`; modification, redistribution, and commercial exploitation require
+prior written permission. This is not an open-source license.
