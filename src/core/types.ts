@@ -78,8 +78,9 @@ export interface IAdapter {
   getStoragePath(): string;
   parse(filePath: string): Promise<NormalizedMessage[]>;
   /**
-   * List session files newest-first. When `workspacePath` is given, prefer the
-   * sessions that belong to that workspace (falling back to all sessions).
+   * List session files newest-first. When `workspacePath` is given, return
+   * only sessions that belong to that workspace; return [] when none match.
+   * Global discovery is requested explicitly by omitting `workspacePath`.
    */
   listSessions(workspacePath?: string): Promise<string[]>;
 }

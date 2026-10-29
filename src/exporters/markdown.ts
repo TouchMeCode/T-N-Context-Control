@@ -12,12 +12,13 @@ export class MarkdownExporter {
    * When no workspace folder is open we don't fail hard — we fall back to the
    * user's home directory so a handoff can always be produced.
    */
-  async export(content: string): Promise<string> {
-    let root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  async export(content: string, workspaceRoot?: string): Promise<string> {
+    let root = workspaceRoot;
     if (!root) {
       root = os.homedir();
       void vscode.window.showWarningMessage(
-        `Context Control: no workspace folder open — saving handoff to your home folder (${root}).`
+        `Context Control: this session is not linked to an open workspace — ` +
+          `saving handoff to your home folder (${root}).`
       );
     }
     const cfg = vscode.workspace.getConfiguration("contextControl");

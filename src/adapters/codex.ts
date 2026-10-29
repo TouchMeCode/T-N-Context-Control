@@ -95,7 +95,9 @@ export class CodexAdapter extends BaseAdapter {
         scoped.push(f);
       }
     }
-    return scoped.length > 0 ? scoped : sorted;
+    // Never substitute another workspace's newest session. A caller that wants
+    // the global list explicitly calls listSessions() without a workspace path.
+    return scoped;
   }
 
   /**

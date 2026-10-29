@@ -29,8 +29,10 @@ Antigravity, and other AI coding tools—is tracked in the
   meters with a live reset countdown, and estimated cost by project — with the
   full sortable table underneath.
 - Generates a structured handoff (`.md`) with the initial/latest request,
-  model-switch history, decisions, TODOs, referenced files, and a compact
-  timeline covering every meaningful user/assistant turn.
+  model-switch history, decisions, TODOs, referenced files, and a full-fidelity
+  timeline of every meaningful user/assistant turn—without `trimmed` gaps.
+- Keeps Generate Handoff scoped to the active project. In a multi-root window,
+  it asks which project to use when the active editor does not identify one.
 
 ## Token counting
 

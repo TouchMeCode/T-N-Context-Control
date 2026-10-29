@@ -72,9 +72,13 @@ export class ClineAdapter extends BaseAdapter {
     return found ?? this.candidateTaskDirs()[0];
   }
 
-  // workspacePath accepted for interface parity but unused: Cline keys tasks by
-  // an opaque id, not by workspace path. TODO: map task -> workspace.
-  async listSessions(_workspacePath?: string): Promise<string[]> {
+  // Cline keys tasks by an opaque id. Until task -> workspace mapping is
+  // verified, never return a global task for a scoped workspace scan: that
+  // would silently mix a different project's conversation into its handoff.
+  async listSessions(workspacePath?: string): Promise<string[]> {
+    if (workspacePath) {
+      return [];
+    }
     const root = this.candidateTaskDirs().find((p) => fs.existsSync(p));
     if (!root) {
       // Cline not installed on this machine — nothing to scan.

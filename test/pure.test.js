@@ -128,6 +128,26 @@ test("CodexAdapter sessionCwd: finds cwd in early metadata, not only line 1", as
   }
 });
 
+test("CodexAdapter: a scoped scan never falls back to another workspace", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cc-codex-scope-"));
+  const file = path.join(dir, "rollout-other.jsonl");
+  const otherWorkspace = path.join(dir, "other-workspace");
+  fs.writeFileSync(
+    file,
+    JSON.stringify({ type: "session_meta", payload: { cwd: otherWorkspace } }) + "\n",
+    "utf-8"
+  );
+
+  try {
+    const adapter = new CodexAdapter();
+    adapter.sessionFiles = async () => [file];
+    assert.deepEqual(await adapter.listSessions(path.join(dir, "wanted-workspace")), []);
+    assert.deepEqual(await adapter.listSessions(), [file]);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("CodexAdapter: preserves model switches on their conversation turns", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cc-codex-models-"));
   const file = path.join(dir, "rollout.jsonl");
@@ -291,6 +311,39 @@ test("HandoffGenerator: removes Codex page noise and carries every narrative tur
   assert.match(markdown, /### 2\. Assistant\nImplemented the reader/);
   assert.match(markdown, /### 3\. User\nNow fix the handoff/);
   assert.match(markdown, /The user's latest request was:[\s\S]*Now fix the handoff/);
+});
+
+test("HandoffGenerator: preserves long turns without a trimmed marker", () => {
+  const generator = new HandoffGenerator();
+  const longMiddle = "รายละเอียดสำคัญ-".repeat(500);
+  const fullRequest = `เริ่มต้น ${longMiddle} จบข้อความ`;
+  const markdown = generator.generate(
+    [
+      {
+        id: "long-user-turn",
+        role: "user",
+        content: fullRequest,
+        timestamp: 1,
+        source: "codex",
+      },
+    ],
+    {
+      totalTokens: 5000,
+      modelLimit: 200000,
+      percentUsed: 2.5,
+      messagesCount: 1,
+      estimatedRemaining: 195000,
+      level: "ok",
+      tokenSource: "usage",
+      estimatedCostUsd: 0,
+      tokensPerMessage: 5000,
+      messagesUntilCritical: 35,
+    },
+    "codex"
+  );
+
+  assert.match(markdown, new RegExp(`### 1\\. User\\n${fullRequest}`));
+  assert.doesNotMatch(markdown, /\[trimmed\]/i);
 });
 
 test("HandoffGenerator: records model switches and marks the latest model active", () => {
@@ -561,6 +614,49 @@ test("StatusBar: labels context separately and gives a quota lockout priority", 
   assert.equal(item.backgroundColor.id, "statusBarItem.errorBackground");
 });
 
+test("MarkdownExporter: writes to the session workspace, not the first open folder", async () => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), "cc-export-scope-"));
+  const firstRoot = path.join(temp, "first");
+  const sessionRoot = path.join(temp, "session-owner");
+  fs.mkdirSync(firstRoot, { recursive: true });
+  fs.mkdirSync(sessionRoot, { recursive: true });
+  let openedPath;
+  const mockVscode = {
+    workspace: {
+      workspaceFolders: [{ uri: { fsPath: firstRoot } }, { uri: { fsPath: sessionRoot } }],
+      getConfiguration() {
+        return { get: (_key, fallback) => ".ai-memory" || fallback };
+      },
+      async openTextDocument(filePath) {
+        openedPath = filePath;
+        return { uri: { fsPath: filePath } };
+      },
+    },
+    window: {
+      async showTextDocument() {},
+      showWarningMessage() { return Promise.resolve(undefined); },
+    },
+  };
+  const originalLoad = Module._load;
+  const modulePath = require.resolve("../out/exporters/markdown");
+  delete require.cache[modulePath];
+  Module._load = function load(request, parent, isMain) {
+    return request === "vscode" ? mockVscode : originalLoad.call(this, request, parent, isMain);
+  };
+  try {
+    const { MarkdownExporter } = require(modulePath);
+    const exported = await new MarkdownExporter().export("full handoff", sessionRoot);
+    assert.equal(exported, openedPath);
+    assert.equal(path.dirname(path.dirname(exported)), sessionRoot);
+    assert.equal(fs.readFileSync(exported, "utf-8"), "full handoff");
+    assert.equal(fs.existsSync(path.join(firstRoot, ".ai-memory")), false);
+  } finally {
+    Module._load = originalLoad;
+    delete require.cache[modulePath];
+    fs.rmSync(temp, { recursive: true, force: true });
+  }
+});
+
 
 // ---------------------------------------------------------------------------
 // JsonlTailReader — the incremental reader behind the fast rescan path.
@@ -669,6 +765,31 @@ function claudeLine(i, tokens) {
     },
   });
 }
+
+test("ClaudeCodeAdapter: scoped discovery never falls back to another workspace", async () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "cc-claude-scope-"));
+  const adapter = new ClaudeCodeAdapter();
+  adapter.getStoragePath = () => root;
+  const wantedWorkspace = path.join(root, "wanted-workspace");
+  const otherWorkspace = path.join(root, "other-workspace");
+  const otherDir = path.join(root, adapter.encodeProjectId(otherWorkspace));
+  fs.mkdirSync(otherDir, { recursive: true });
+  const otherSession = path.join(otherDir, "other.jsonl");
+  fs.writeFileSync(otherSession, claudeLine(0, 100) + "\n", "utf-8");
+
+  try {
+    assert.deepEqual(await adapter.listSessions(wantedWorkspace), []);
+    assert.deepEqual(await adapter.listSessions(), [otherSession]);
+
+    const wantedDir = path.join(root, adapter.encodeProjectId(wantedWorkspace));
+    fs.mkdirSync(wantedDir, { recursive: true });
+    const wantedSession = path.join(wantedDir, "wanted.jsonl");
+    fs.writeFileSync(wantedSession, claudeLine(1, 100) + "\n", "utf-8");
+    assert.deepEqual(await adapter.listSessions(wantedWorkspace), [wantedSession]);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
 
 test("ClaudeCodeAdapter: incremental parse matches a single full parse", async () => {
   const f = tmpFile("session.jsonl");

@@ -2,6 +2,25 @@
 
 All notable changes to **T&N Context Control** are listed here.
 
+## [0.2.6] — 2026-10-30
+
+### Fixed
+
+- **Generate Handoff no longer mixes projects.** Claude Code and Codex session
+  discovery is now strictly scoped to the active workspace, multi-root windows
+  prompt for an unambiguous project when needed, and exports are written to the
+  workspace that owns the selected session.
+- **Handoffs no longer contain `…[trimmed]…` gaps.** Every meaningful user and
+  assistant turn is preserved in full so another AI can continue with the
+  details in the middle of long messages intact.
+- Handoff generation now waits for in-flight scans and clears stale session
+  state when no matching conversation exists.
+
+### Legal
+
+- Clarified the repository's source-available proprietary license and the
+  permissions granted for official unmodified releases.
+
 ## [0.2.5] — 2026-10-06
 
 ### Security

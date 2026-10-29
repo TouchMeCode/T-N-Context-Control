@@ -102,9 +102,10 @@ export class ClaudeCodeAdapter extends BaseAdapter {
   }
 
   /**
-   * Return session .jsonl paths newest-first. When `workspacePath` is given and
-   * a matching project folder exists, only that project's sessions are returned
-   * (so we track the conversation for the open workspace, not a random newest).
+   * Return session .jsonl paths newest-first. When `workspacePath` is given,
+   * only that project's sessions are returned. An empty result stays empty:
+   * falling back to a global session here would mix another project into the
+   * open workspace's status and handoff.
    */
   async listSessions(workspacePath?: string): Promise<string[]> {
     const root = this.getStoragePath();
@@ -112,10 +113,7 @@ export class ClaudeCodeAdapter extends BaseAdapter {
     if (workspacePath) {
       const projectDir = path.join(root, this.encodeProjectId(workspacePath));
       const scoped = await this.statSessions(projectDir);
-      if (scoped.length > 0) {
-        return scoped.sort((a, b) => b.mtime - a.mtime).map((s) => s.file);
-      }
-      // fall through to a global scan if the workspace has no sessions yet
+      return scoped.sort((a, b) => b.mtime - a.mtime).map((s) => s.file);
     }
 
     let projects: fs.Dirent[];

@@ -47,8 +47,8 @@ export class HandoffGenerator {
     if (requests.length === 0) {
       return "(no user request found)";
     }
-    const first = this.compact(requests[0], 800);
-    const latest = this.compact(requests[requests.length - 1], 1200);
+    const first = requests[0];
+    const latest = requests[requests.length - 1];
     return requests.length === 1 || first === latest
       ? latest
       : `**Initial request:** ${first}\n\n**Latest request:** ${latest}`;
@@ -166,22 +166,20 @@ export class HandoffGenerator {
   }
 
   /**
-   * A compact extract of every meaningful narrative turn. This is the reliable
-   * fallback for a local-only generator: it never pretends a regex produced an
-   * LLM-quality summary, but it gives the next assistant the whole discussion.
+   * A full-fidelity extract of every meaningful narrative turn. This is the
+   * reliable fallback for a local-only generator: it never pretends a regex
+   * produced an LLM-quality summary, and it does not silently remove context
+   * the next assistant may need.
    */
   private conversation(messages: NormalizedMessage[]): string {
     const turns = this.meaningfulMessages(messages);
     if (turns.length === 0) {
       return "(no narrative conversation found)";
     }
-    // Keep the complete handoff practical even for very long sessions. Every
-    // turn remains represented; long turns retain both their start and end.
-    const perTurn = Math.max(40, Math.min(1200, Math.floor(48_000 / turns.length) - 40));
     return turns
       .map((m, index) => {
         const role = m.role === "user" ? "User" : "Assistant";
-        return `### ${index + 1}. ${role}\n${this.compact(this.clean(m.content), perTurn)}`;
+        return `### ${index + 1}. ${role}\n${this.clean(m.content)}`;
       })
       .join("\n\n");
   }
@@ -192,7 +190,7 @@ export class HandoffGenerator {
     if (users.length === 0) {
       return "Review the conversation timeline above and continue the unfinished work.";
     }
-    const latest = this.compact(this.clean(users[users.length - 1].content), 1600);
+    const latest = this.clean(users[users.length - 1].content);
     return (
       `Continue this session from the handoff. The user's latest request was:\n\n` +
       `> ${latest.replace(/\n/g, "\n> ")}\n\n` +
@@ -235,18 +233,6 @@ export class HandoffGenerator {
         !/^# AGENTS\.md instructions/i.test(text)
       );
     });
-  }
-
-  private compact(text: string, max: number): string {
-    if (text.length <= max) {
-      return text;
-    }
-    if (max < 40) {
-      return `${text.slice(0, Math.max(max - 1, 1))}…`;
-    }
-    const tail = Math.max(Math.floor(max * 0.3), 16);
-    const head = max - tail - 15;
-    return `${text.slice(0, head).trimEnd()} …[trimmed]… ${text.slice(-tail).trimStart()}`;
   }
 
   private sentences(text: string): string[] {

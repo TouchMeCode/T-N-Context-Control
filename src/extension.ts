@@ -30,6 +30,15 @@ interface SessionCandidate {
   fingerprint: FileFingerprint;
 }
 
+interface LocatedSession {
+  adapter: BaseAdapter;
+  file: string;
+  messages: NormalizedMessage[];
+  mtime: number;
+  /** Open workspace folder whose scoped lookup produced this session. */
+  workspaceRoot?: string;
+}
+
 type ContextControlMenuCommand =
   | "cockpit"
   | "dashboard"
@@ -166,37 +175,48 @@ export function activate(context: vscode.ExtensionContext): void {
   const cockpit = new Cockpit();
 
   // Shared state: the most recently analyzed session.
-  let latest: { messages: NormalizedMessage[]; stats: ContextStats; source: Source } | undefined;
+  let latest:
+    | {
+        messages: NormalizedMessage[];
+        stats: ContextStats;
+        source: Source;
+        file: string;
+        workspaceRoot?: string;
+      }
+    | undefined;
 
   // A scan can outlast the debounce that triggered it, so serialize: one runs
   // at a time and at most one more is queued behind it. Without this, a busy
   // session could stack overlapping parses on the extension host.
-  let scanning = false;
+  let scanPromise: Promise<void> | undefined;
   let rescanQueued = false;
 
   /** Find the session for the open workspace (or newest) and analyze it. */
   async function scan(silent = false): Promise<void> {
-    if (scanning) {
+    if (scanPromise) {
       rescanQueued = true;
-      return;
+      return scanPromise;
     }
-    scanning = true;
-    try {
-      await runScan(silent);
-    } catch (err) {
-      logError("scan failed", err);
-      if (!silent) {
-        void vscode.window.showErrorMessage(
-          "Context Control: scan failed. Run 'Context Control: Show Logs' for details."
-        );
+    scanPromise = (async () => {
+      try {
+        let nextSilent = silent;
+        do {
+          rescanQueued = false;
+          await runScan(nextSilent);
+          nextSilent = true;
+        } while (rescanQueued);
+      } catch (err) {
+        logError("scan failed", err);
+        if (!silent) {
+          void vscode.window.showErrorMessage(
+            "Context Control: scan failed. Run 'Context Control: Show Logs' for details."
+          );
+        }
+      } finally {
+        scanPromise = undefined;
       }
-    } finally {
-      scanning = false;
-      if (rescanQueued) {
-        rescanQueued = false;
-        void scan(true);
-      }
-    }
+    })();
+    return scanPromise;
   }
 
   /** Every open workspace folder, or `[undefined]` when none is open. */
@@ -208,45 +228,90 @@ export function activate(context: vscode.ExtensionContext): void {
     return folders.map((f) => f.uri.fsPath);
   }
 
-  async function runScan(silent: boolean): Promise<void> {
-    const started = Date.now();
-    let best:
-      | { adapter: BaseAdapter; file: string; messages: NormalizedMessage[]; mtime: number }
-      | undefined;
+  /** The open folder containing the active editor, or the sole open folder. */
+  function activeWorkspaceRoot(): string | undefined {
+    const editor = vscode.window.activeTextEditor;
+    if (editor) {
+      const folder = vscode.workspace.getWorkspaceFolder(editor.document.uri);
+      if (folder) {
+        return folder.uri.fsPath;
+      }
+    }
+    const folders = vscode.workspace.workspaceFolders;
+    return folders?.length === 1 ? folders[0].uri.fsPath : undefined;
+  }
+
+  /** Resolve an unambiguous workspace for Generate Handoff in multi-root windows. */
+  async function handoffWorkspaceRoot(): Promise<
+    { cancelled: false; root?: string } | { cancelled: true }
+  > {
+    const active = activeWorkspaceRoot();
+    if (active) {
+      return { cancelled: false, root: active };
+    }
+    const folders = vscode.workspace.workspaceFolders ?? [];
+    if (folders.length <= 1) {
+      return { cancelled: false, root: folders[0]?.uri.fsPath };
+    }
+    const picked = await vscode.window.showQuickPick(
+      folders.map((folder) => ({
+        label: folder.name,
+        description: folder.uri.fsPath,
+        root: folder.uri.fsPath,
+      })),
+      {
+        placeHolder: "Choose the project whose conversation should be handed off",
+        title: "Context Control: Select Project",
+      }
+    );
+    return picked ? { cancelled: false, root: picked.root } : { cancelled: true };
+  }
+
+  /** Find the freshest provider session strictly inside the supplied folders. */
+  async function findBestSession(
+    roots: (string | undefined)[]
+  ): Promise<LocatedSession | undefined> {
+    let best: LocatedSession | undefined;
 
     for (const adapter of adapters) {
-      // In a multi-root workspace each folder may have its own session; collect
-      // the newest candidate from each, then parse only the freshest of them.
-      const candidates = new Map<string, number>();
-      for (const workspacePath of workspacePaths()) {
+      const candidates = new Map<string, { mtime: number; workspaceRoot?: string }>();
+      for (const workspaceRoot of roots) {
         let sessions: string[] = [];
         try {
-          sessions = await adapter.listSessions(workspacePath);
+          sessions = await adapter.listSessions(workspaceRoot);
         } catch (err) {
           logError(`${adapter.name} listSessions failed`, err);
           continue;
         }
-        // listSessions returns newest-first; take the freshest one.
         const file = sessions[0];
         if (file !== undefined && !candidates.has(file)) {
-          candidates.set(file, await fileMtime(file));
+          candidates.set(file, { mtime: await fileMtime(file), workspaceRoot });
         }
       }
       if (candidates.size === 0) {
         continue;
       }
-      const [file, mtime] = [...candidates.entries()].sort((a, b) => b[1] - a[1])[0];
+      const [file, located] = [...candidates.entries()].sort(
+        (a, b) => b[1].mtime - a[1].mtime
+      )[0];
       try {
         const messages = await adapter.parse(file);
-        if (messages.length > 0 && (!best || mtime > best.mtime)) {
-          best = { adapter, file, messages, mtime };
+        if (messages.length > 0 && (!best || located.mtime > best.mtime)) {
+          best = { adapter, file, messages, ...located };
         }
       } catch (err) {
         logError(`${adapter.name} parse failed for ${file}`, err);
       }
     }
+    return best;
+  }
+
+  async function runScan(silent: boolean): Promise<void> {
+    const started = Date.now();
+    const best = await findBestSession(workspacePaths());
 
     if (!best) {
+      latest = undefined;
       log("scan: no conversations found");
       if (!silent) {
         void vscode.window.showInformationMessage(
@@ -259,7 +324,13 @@ export function activate(context: vscode.ExtensionContext): void {
     // Auto-detect the context window from the conversation's model (#3).
     const modelLimit = modelLimitFromMessages(best.messages);
     const stats = analyzer.analyze(best.messages, modelLimit);
-    latest = { messages: best.messages, stats, source: best.adapter.name };
+    latest = {
+      messages: best.messages,
+      stats,
+      source: best.adapter.name,
+      file: best.file,
+      workspaceRoot: best.workspaceRoot,
+    };
     const models = modelsFromMessages(best.messages);
     statusBar.update(stats);
     cockpit.update({
@@ -380,6 +451,24 @@ export function activate(context: vscode.ExtensionContext): void {
     return out;
   }
 
+  /** Resolve a dashboard session back to the open workspace that owns it. */
+  async function workspaceRootForSession(
+    adapter: BaseAdapter,
+    file: string
+  ): Promise<string | undefined> {
+    for (const folder of vscode.workspace.workspaceFolders ?? []) {
+      try {
+        const scoped = await adapter.listSessions(folder.uri.fsPath);
+        if (scoped.includes(file)) {
+          return folder.uri.fsPath;
+        }
+      } catch (err) {
+        logError(`${adapter.name} workspace lookup failed`, err);
+      }
+    }
+    return undefined;
+  }
+
   /** Generate + export a handoff for a specific session file (from the dashboard). */
   async function handoffForFile(file: string, source: Source): Promise<void> {
     try {
@@ -397,7 +486,8 @@ export function activate(context: vscode.ExtensionContext): void {
       }
       const stats = analyzer.analyze(messages, modelLimitFromMessages(messages));
       const md = generator.generate(messages, stats, source);
-      const saved = await exporter.export(md);
+      const workspaceRoot = await workspaceRootForSession(adapter, file);
+      const saved = await exporter.export(md, workspaceRoot);
       void vscode.window.showInformationMessage(`Context Control: handoff saved to ${saved}`);
     } catch (err) {
       // This runs from a webview message handler, where a rejected promise
@@ -550,16 +640,29 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
 
     vscode.commands.registerCommand("contextControl.handoff", async () => {
-      if (!latest) {
-        await scan(true);
-      }
-      if (!latest) {
-        void vscode.window.showWarningMessage("Context Control: nothing to hand off yet.");
+      // Generate from the active editor's workspace, not from the globally
+      // freshest session tracked by the status bar. In multi-root workspaces
+      // those can be different projects.
+      const resolved = await handoffWorkspaceRoot();
+      if (resolved.cancelled) {
         return;
       }
-      const md = generator.generate(latest.messages, latest.stats, latest.source);
-      const path = await exporter.export(md);
-      void vscode.window.showInformationMessage(`Context Control: handoff saved to ${path}`);
+      const workspaceRoot = resolved.root;
+      const selected = await findBestSession(workspaceRoot ? [workspaceRoot] : [undefined]);
+      if (!selected) {
+        const scope = workspaceRoot ? ` for ${path.basename(workspaceRoot)}` : "";
+        void vscode.window.showWarningMessage(
+          `Context Control: no conversation found${scope}; no handoff was generated.`
+        );
+        return;
+      }
+      const stats = analyzer.analyze(
+        selected.messages,
+        modelLimitFromMessages(selected.messages)
+      );
+      const md = generator.generate(selected.messages, stats, selected.adapter.name);
+      const saved = await exporter.export(md, selected.workspaceRoot);
+      void vscode.window.showInformationMessage(`Context Control: handoff saved to ${saved}`);
     }),
 
     vscode.commands.registerCommand("contextControl.export", async () => {
